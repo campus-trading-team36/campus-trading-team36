@@ -34,7 +34,7 @@ function sendMessage(senderId, senderName, receiverId, content, productId) {
     receiverName: receiver.username,
     content: text,
     productId: productId || null,
-    read: false,
+    isRead: false,
     createdAt: new Date().toISOString()
   };
 
@@ -66,7 +66,7 @@ function getConversations(userId) {
       convMap[otherId].lastMessage = msg;
     }
 
-    if (msg.receiverId === userId && !msg.read) {
+    if (msg.receiverId === userId && !msg.isRead) {
       convMap[otherId].unreadCount++;
     }
   }
@@ -93,8 +93,8 @@ function getChatHistory(userId, partnerId, opts) {
   // mark messages as read (only those addressed to me)
   let changed = false;
   for (const msg of history) {
-    if (msg.receiverId === userId && !msg.read) {
-      msg.read = true;
+    if (msg.receiverId === userId && !msg.isRead) {
+      msg.isRead = true;
       changed = true;
     }
   }
@@ -110,7 +110,7 @@ function getChatHistory(userId, partnerId, opts) {
 function getUnreadCount(userId) {
   let count = 0;
   for (const m of store.messages) {
-    if (m.receiverId === userId && !m.read) count++;
+    if (m.receiverId === userId && !m.isRead) count++;
   }
   return { success: true, data: { unread: count } };
 }
@@ -123,8 +123,8 @@ function markConversationRead(userId, partnerId) {
   }
   let changed = 0;
   for (const m of store.messages) {
-    if (m.senderId === partnerId && m.receiverId === userId && !m.read) {
-      m.read = true;
+    if (m.senderId === partnerId && m.receiverId === userId && !m.isRead) {
+      m.isRead = true;
       changed++;
     }
   }
