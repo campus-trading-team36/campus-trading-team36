@@ -26,3 +26,11 @@ Thumbs.db
 
 # claude code local cache
 .claude/
+data.db 
+data.db-* 
+data.test.db 
+data.test.db-* 
+data.json.imported 
+~$*.docx 
+~$*.doc 
+node_modules/ 

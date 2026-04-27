@@ -109,10 +109,10 @@ function getProductById(id, viewerId) {
   if (!viewerId || viewerId !== product.sellerId) {
     pendingViewBumps.set(id, (pendingViewBumps.get(id) || 0) + 1);
     scheduleViewFlush();
-    // expose the in-flight count so the response matches what users see
+    // show their own view immediately - flushed bumps are already in product.viewCount
     return {
       success: true,
-      data: { ...product, viewCount: (product.viewCount || 0) + (pendingViewBumps.get(id) || 0) }
+      data: { ...product, viewCount: (product.viewCount || 0) + 1 }
     };
   }
   return { success: true, data: product };
@@ -126,7 +126,9 @@ function flushPendingViews() {
     if (p) p.viewCount = (p.viewCount || 0) + n;
   }
   pendingViewBumps.clear();
-  save();
+  // use sync save so shutdown can't exit before the write lands
+  try { require('../models/db').saveSync(); }
+  catch { save(); } // fallback if saveSync isn't exported (shouldn't happen)
 }
 
 function createProduct(userId, userName, data) {

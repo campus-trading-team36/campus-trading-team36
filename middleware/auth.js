@@ -42,7 +42,10 @@ function pruneExpired() {
   const cutoff = Date.now() - SESSION_TTL_MS;
   let changed = false;
   for (const tok of Object.keys(sessions)) {
-    if (sessions[tok].lastSeen < cutoff) {
+    const s = sessions[tok];
+    // legacy sessions may lack lastSeen - fall back to createdAt or expire them
+    const seen = s.lastSeen || s.createdAt || 0;
+    if (seen < cutoff) {
       delete sessions[tok];
       changed = true;
     }
@@ -111,8 +114,9 @@ function requireAuth(req, res, next) {
     return res.status(401).json({ success: false, message: 'Session expired, please log in again' });
   }
 
-  // expire stale sessions
-  if (Date.now() - session.lastSeen > SESSION_TTL_MS) {
+  // expire stale sessions (handle legacy sessions without lastSeen)
+  const lastSeen = session.lastSeen || session.createdAt || 0;
+  if (Date.now() - lastSeen > SESSION_TTL_MS) {
     delete sessions[token];
     persistSessions();
     return res.status(401).json({ success: false, message: 'Session expired, please log in again' });
