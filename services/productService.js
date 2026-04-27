@@ -1,8 +1,52 @@
+// product business logic
+
+const fs = require('fs');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
+const config = require('../config');
+const { cleanString, clampInt, clampFloat, stripUnsafe } = require('../utils/validators');
 
 const VALID_CATEGORIES = ['Electronics', 'Books', 'Clothing', 'Furniture', 'Sports', 'Stationery', 'Other'];
 const VALID_CONDITIONS = ['new', 'like-new', 'good', 'fair'];
+const UPLOADS_DIR = path.join(__dirname, '../uploads');
+
+// in-memory pending view-count increments, flushed every 30s
+// stops the JSON file being rewritten on every detail page view
+const pendingViewBumps = new Map(); // productId -> count
+let viewFlushTimer = null;
+function scheduleViewFlush() {
+  if (viewFlushTimer) return;
+  viewFlushTimer = setTimeout(() => {
+    viewFlushTimer = null;
+    if (pendingViewBumps.size === 0) return;
+    let changed = false;
+    for (const [id, n] of pendingViewBumps.entries()) {
+      const p = store.products.find(x => x.id === id);
+      if (p) { p.viewCount = (p.viewCount || 0) + n; changed = true; }
+    }
+    pendingViewBumps.clear();
+    if (changed) save();
+  }, 30 * 1000).unref();
+}
+
+// remove on-disk image files for the given product (best effort)
+function cleanupImages(product) {
+  if (!product || !Array.isArray(product.images)) return;
+  for (const url of product.images) {
+    if (typeof url !== 'string') continue;
+    if (!url.startsWith('/uploads/')) continue;
+    const fileName = path.basename(url);
+    // basic safety check - no traversal
+    if (fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) continue;
+    const full = path.join(UPLOADS_DIR, fileName);
+    fs.unlink(full, err => {
+      if (err && err.code !== 'ENOENT') {
+        console.warn('[Cleanup] could not delete', full, ':', err.message);
+      }
+    });
+  }
+}
 
 function getProducts(query) {
   let result = store.products.filter(p => p.status === 'approved');
@@ -12,7 +56,7 @@ function getProducts(query) {
   }
 
   if (query.keyword) {
-    const kw = query.keyword.toLowerCase();
+    const kw = String(query.keyword).toLowerCase().slice(0, 100);
     result = result.filter(p =>
       p.title.toLowerCase().includes(kw) ||
       p.description.toLowerCase().includes(kw) ||
@@ -21,10 +65,19 @@ function getProducts(query) {
     );
   }
 
-  if (query.minPrice) result = result.filter(p => p.price >= Number(query.minPrice));
-  if (query.maxPrice) result = result.filter(p => p.price <= Number(query.maxPrice));
+  if (query.minPrice !== undefined && query.minPrice !== '') {
+    const v = clampFloat(query.minPrice, 0, 999999);
+    if (v !== null) result = result.filter(p => p.price >= v);
+  }
+  if (query.maxPrice !== undefined && query.maxPrice !== '') {
+    const v = clampFloat(query.maxPrice, 0, 999999);
+    if (v !== null) result = result.filter(p => p.price <= v);
+  }
   if (query.condition) result = result.filter(p => p.condition === query.condition);
-  if (query.location) result = result.filter(p => p.location && p.location.toLowerCase().includes(query.location.toLowerCase()));
+  if (query.location) {
+    const loc = String(query.location).toLowerCase();
+    result = result.filter(p => p.location && p.location.toLowerCase().includes(loc));
+  }
 
   if (query.sort === 'price_asc') {
     result.sort((a, b) => a.price - b.price);
@@ -36,34 +89,62 @@ function getProducts(query) {
     result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
 
-  return { success: true, data: result };
+  // optional pagination - clients that don't pass page/limit get the full list (back-compat)
+  const total = result.length;
+  if (query.page !== undefined || query.limit !== undefined) {
+    const page = clampInt(query.page, 1, 10000, 1);
+    const limit = clampInt(query.limit, 1, 100, 24);
+    const start = (page - 1) * limit;
+    result = result.slice(start, start + limit);
+    return { success: true, data: result, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  return { success: true, data: result, meta: { total } };
 }
 
-function getProductById(id) {
+function getProductById(id, viewerId) {
   const product = store.products.find(p => p.id === id);
   if (!product) return { success: false, message: 'Product not found' };
-  product.viewCount = (product.viewCount || 0) + 1;
-  save();
+  // bump view count off the hot path - batched and flushed every 30s
+  if (!viewerId || viewerId !== product.sellerId) {
+    pendingViewBumps.set(id, (pendingViewBumps.get(id) || 0) + 1);
+    scheduleViewFlush();
+    // expose the in-flight count so the response matches what users see
+    return {
+      success: true,
+      data: { ...product, viewCount: (product.viewCount || 0) + (pendingViewBumps.get(id) || 0) }
+    };
+  }
   return { success: true, data: product };
 }
 
-function createProduct(userId, userName, data) {
-  if (!data.title || !data.price) {
-    return { success: false, message: 'Title and price are required' };
+// flush pending view counts now (called on graceful shutdown)
+function flushPendingViews() {
+  if (pendingViewBumps.size === 0) return;
+  for (const [id, n] of pendingViewBumps.entries()) {
+    const p = store.products.find(x => x.id === id);
+    if (p) p.viewCount = (p.viewCount || 0) + n;
   }
-  if (data.title.length > 100) {
-    return { success: false, message: 'Title too long (max 100 characters)' };
-  }
+  pendingViewBumps.clear();
+  save();
+}
 
-  const price = Number(data.price);
-  if (isNaN(price) || price < 1 || price > 99999) {
+function createProduct(userId, userName, data) {
+  const title = cleanString(data.title, 100);
+  if (!title || title.length < 2) {
+    return { success: false, message: 'Title is required (2-100 characters)' };
+  }
+  const description = stripUnsafe(cleanString(data.description, 2000));
+
+  const price = clampFloat(data.price, 0.01, 99999);
+  if (price === null || price < 1) {
     return { success: false, message: 'Price must be between £1 and £99,999' };
   }
 
   let images = [];
   if (Array.isArray(data.images) && data.images.length > 0) {
-    images = data.images.filter(Boolean).slice(0, 5);
-  } else if (data.image) {
+    images = data.images.filter(v => typeof v === 'string' && v.length < 500).slice(0, config.maxImagesPerProduct);
+  } else if (typeof data.image === 'string' && data.image.length < 500) {
     images = [data.image];
   }
   if (images.length === 0) {
@@ -72,28 +153,31 @@ function createProduct(userId, userName, data) {
 
   let tags = [];
   if (Array.isArray(data.tags)) {
-    tags = data.tags.filter(Boolean);
+    tags = data.tags.map(t => cleanString(t, 30)).filter(Boolean);
   } else if (typeof data.tags === 'string' && data.tags.trim()) {
-    tags = data.tags.split(',').map(t => t.trim()).filter(Boolean);
+    tags = data.tags.split(',').map(t => cleanString(t, 30)).filter(Boolean);
   }
+  // dedupe + cap
+  tags = [...new Set(tags)].slice(0, 10);
 
   const product = {
     id: uuidv4(),
-    title: data.title.trim(),
-    description: (data.description || '').trim(),
-    price,
+    title,
+    description,
+    price: Math.round(price * 100) / 100,
     category: VALID_CATEGORIES.includes(data.category) ? data.category : 'Other',
     images,
     image: images[0],
     condition: VALID_CONDITIONS.includes(data.condition) ? data.condition : 'good',
-    brand: (data.brand || '').trim(),
-    purchaseDate: data.purchaseDate || '',
-    defects: (data.defects || '').trim(),
-    location: (data.location || '').trim(),
+    brand: cleanString(data.brand, 50),
+    purchaseDate: cleanString(data.purchaseDate, 20),
+    defects: stripUnsafe(cleanString(data.defects, 500)),
+    location: cleanString(data.location, 100),
     tags,
     sellerId: userId,
     sellerName: userName,
-    status: 'approved',
+    // moderation: new listings start as pending unless disabled
+    status: config.moderationEnabled ? 'pending' : 'approved',
     viewCount: 0,
     createdAt: new Date().toISOString()
   };
@@ -101,7 +185,13 @@ function createProduct(userId, userName, data) {
   store.products.push(product);
   save();
 
-  return { success: true, message: 'Product listed successfully', data: product };
+  return {
+    success: true,
+    message: config.moderationEnabled
+      ? 'Product submitted for review. It will appear once an admin approves it.'
+      : 'Product listed successfully',
+    data: product
+  };
 }
 
 function updateProduct(productId, userId, data) {
@@ -111,41 +201,76 @@ function updateProduct(productId, userId, data) {
   if (product.sellerId !== userId) {
     return { success: false, message: 'You can only edit your own listings' };
   }
+  if (product.status === 'sold') {
+    return { success: false, message: 'Sold listings cannot be edited' };
+  }
+  if (product.status === 'removed') {
+    return { success: false, message: 'This listing was removed by an admin and cannot be edited' };
+  }
 
-  if (data.title !== undefined) product.title = data.title.trim();
-  if (data.description !== undefined) product.description = data.description.trim();
+  // track if a "material" field changed - those re-trigger moderation
+  let materialChange = false;
+
+  if (data.title !== undefined) {
+    const t = cleanString(data.title, 100);
+    if (!t || t.length < 2) return { success: false, message: 'Title must be 2-100 characters' };
+    if (t !== product.title) materialChange = true;
+    product.title = t;
+  }
+  if (data.description !== undefined) {
+    const desc = stripUnsafe(cleanString(data.description, 2000));
+    if (desc !== product.description) materialChange = true;
+    product.description = desc;
+  }
   if (data.price !== undefined) {
-    const price = Number(data.price);
-    if (isNaN(price) || price < 1) return { success: false, message: 'Invalid price' };
-    product.price = price;
+    const price = clampFloat(data.price, 0.01, 99999);
+    if (price === null || price < 1) return { success: false, message: 'Price must be between £1 and £99,999' };
+    const rounded = Math.round(price * 100) / 100;
+    if (rounded !== product.price) materialChange = true;
+    product.price = rounded;
   }
   if (data.category && VALID_CATEGORIES.includes(data.category)) product.category = data.category;
   if (data.condition && VALID_CONDITIONS.includes(data.condition)) product.condition = data.condition;
-  if (data.brand !== undefined) product.brand = data.brand.trim();
-  if (data.purchaseDate !== undefined) product.purchaseDate = data.purchaseDate;
-  if (data.defects !== undefined) product.defects = data.defects.trim();
-  if (data.location !== undefined) product.location = data.location.trim();
+  if (data.brand !== undefined) product.brand = cleanString(data.brand, 50);
+  if (data.purchaseDate !== undefined) product.purchaseDate = cleanString(data.purchaseDate, 20);
+  if (data.defects !== undefined) product.defects = stripUnsafe(cleanString(data.defects, 500));
+  if (data.location !== undefined) product.location = cleanString(data.location, 100);
 
+  // images: if user supplies new set, the old uploaded files should be cleaned
   if (Array.isArray(data.images) && data.images.length > 0) {
-    product.images = data.images.filter(Boolean).slice(0, 5);
-    product.image = product.images[0];
-  } else if (data.image) {
+    const newImages = data.images.filter(v => typeof v === 'string' && v.length < 500).slice(0, config.maxImagesPerProduct);
+    const removed = (product.images || []).filter(url => !newImages.includes(url));
+    if (removed.length > 0) { cleanupImages({ images: removed }); materialChange = true; }
+    if (JSON.stringify(newImages) !== JSON.stringify(product.images)) materialChange = true;
+    product.images = newImages;
+    product.image = newImages[0];
+  } else if (typeof data.image === 'string' && data.image.length < 500) {
+    if (product.image && product.image !== data.image) { cleanupImages({ images: [product.image] }); materialChange = true; }
     product.images = [data.image];
     product.image = data.image;
   }
 
   if (data.tags !== undefined) {
-    if (Array.isArray(data.tags)) {
-      product.tags = data.tags.filter(Boolean);
-    } else if (typeof data.tags === 'string') {
-      product.tags = data.tags.split(',').map(t => t.trim()).filter(Boolean);
-    }
+    let tags = [];
+    if (Array.isArray(data.tags)) tags = data.tags.map(t => cleanString(t, 30)).filter(Boolean);
+    else if (typeof data.tags === 'string') tags = data.tags.split(',').map(t => cleanString(t, 30)).filter(Boolean);
+    product.tags = [...new Set(tags)].slice(0, 10);
   }
 
   product.updatedAt = new Date().toISOString();
+  // re-trigger moderation only when something material changed
+  // (price tweaks/spelling fixes shouldn't keep dropping listings out of the grid)
+  const reReview = config.moderationEnabled && materialChange && product.status === 'approved';
+  if (reReview) {
+    product.status = 'pending';
+  }
 
   save();
-  return { success: true, message: 'Product updated', data: product };
+  return {
+    success: true,
+    message: reReview ? 'Product updated and re-submitted for review' : 'Product updated',
+    data: product
+  };
 }
 
 function deleteProduct(productId, user) {
@@ -165,6 +290,12 @@ function deleteProduct(productId, user) {
   for (let i = store.cart.length - 1; i >= 0; i--) {
     if (store.cart[i].productId === productId) store.cart.splice(i, 1);
   }
+  for (let i = store.browsingHistory.length - 1; i >= 0; i--) {
+    if (store.browsingHistory[i].productId === productId) store.browsingHistory.splice(i, 1);
+  }
+
+  // remove uploaded image files so they don't pile up
+  cleanupImages(product);
 
   save();
   return { success: true, message: 'Product deleted' };
@@ -185,6 +316,12 @@ function markAsSold(productId, userId) {
 
   product.status = 'sold';
   product.soldAt = new Date().toISOString();
+
+  // remove this sold product from everyone's cart so they don't get stuck
+  for (let i = store.cart.length - 1; i >= 0; i--) {
+    if (store.cart[i].productId === productId) store.cart.splice(i, 1);
+  }
+
   save();
   return { success: true, message: 'Product marked as sold', data: product };
 }
@@ -208,4 +345,7 @@ function getUserStats(userId) {
   };
 }
 
-module.exports = { getProducts, getProductById, createProduct, updateProduct, deleteProduct, getUserListings, markAsSold, getUserStats };
+module.exports = {
+  getProducts, getProductById, createProduct, updateProduct, deleteProduct,
+  getUserListings, markAsSold, getUserStats, flushPendingViews
+};

@@ -1,6 +1,11 @@
+// data store - JSON file-backed, with atomic writes and migration on load
+
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const config = require('../config');
+const { hashPassword, isHashed } = require('../utils/security');
+const { enqueueSave, writeSyncAtomic } = require('../utils/atomicWrite');
 
 const DATA_FILE = path.join(__dirname, '../data.json');
 
@@ -13,7 +18,8 @@ const defaults = {
   verifyCodes: [],
   reviews: [],
   browsingHistory: [],
-  cart: []
+  cart: [],
+  adminLog: []
 };
 
 let store;
@@ -36,31 +42,48 @@ if (fs.existsSync(DATA_FILE)) {
       if (p.viewCount === undefined) p.viewCount = 0;
     }
     if (migrated > 0) { console.log('[DB] Migrated', store.products.length, 'products to new schema'); }
+    // migrate plaintext passwords to hashed (one-time, idempotent)
+    let pwMigrated = 0;
+    for (const u of store.users) {
+      if (u.password && !isHashed(u.password)) {
+        u.password = hashPassword(u.password);
+        pwMigrated++;
+      }
+    }
+    if (pwMigrated > 0) console.log(`[DB] Hashed ${pwMigrated} legacy plaintext passwords`);
+    // ensure new user fields exist on legacy data
+    for (const u of store.users) {
+      if (u.banned === undefined) u.banned = false;
+      if (u.lastLoginAt === undefined) u.lastLoginAt = null;
+    }
     console.log('[DB] Loaded data from', DATA_FILE);
   } catch (e) {
-    console.warn('[DB] Could not read data file, starting fresh');
-    store = { ...defaults };
+    console.warn('[DB] Could not read data file, starting fresh:', e.message);
+    store = JSON.parse(JSON.stringify(defaults));
   }
 } else {
-  store = { ...defaults };
+  store = JSON.parse(JSON.stringify(defaults));
 }
 
+// async save - safe under concurrent calls (queued)
 function save() {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(store, null, 2), 'utf8');
-  } catch (e) {
-    console.error('[DB] Save failed:', e.message);
-  }
+  enqueueSave(DATA_FILE, () => JSON.stringify(store, null, 2));
 }
 
+// sync save - only used for first-time init
+function saveSync() {
+  writeSyncAtomic(DATA_FILE, JSON.stringify(store, null, 2));
+}
+
+// seed admin + sample products on first run
 if (!store.users.find(u => u.id === 'admin-001')) {
   const now = new Date().toISOString();
 
   store.users.push({
     id: 'admin-001',
-    username: 'admin',
-    email: 'admin@liverpool.ac.uk',
-    password: 'admin123',
+    username: config.admin.username,
+    email: config.admin.email.toLowerCase(),
+    password: hashPassword(config.admin.password),
     role: 'admin',
     verified: true,
     createdAt: now
@@ -71,28 +94,28 @@ if (!store.users.find(u => u.id === 'admin-001')) {
       title: 'Dell XPS 13 Laptop',
       description: 'Used for 1 year, good condition. Battery lasts about 4 hours. Comes with original charger and carry bag.',
       price: 280, category: 'Electronics',
-      images: ['https://images.unsplash.com/photo-1496181133206-80ce9b88a853?w=800&h=600&fit=crop'],
+      images: ['https://images.unsplash.com/photo-1593642632559-0c6d3fc62b89?w=800&h=600&fit=crop'],
       condition: 'good', brand: 'Dell', location: 'Carnatic Halls', tags: ['laptop', 'computer']
     },
     {
       title: 'Sony WH-1000XM4 Headphones',
       description: 'Noise-cancelling headphones, barely used. Comes with case and cables. Bought for £280.',
       price: 120, category: 'Electronics',
-      images: ['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&h=600&fit=crop'],
+      images: ['https://images.unsplash.com/photo-1583394838336-acd977736f90?w=800&h=600&fit=crop'],
       condition: 'like-new', brand: 'Sony', location: 'Greenbank', tags: ['headphones', 'audio']
     },
     {
       title: 'ACFI101 Accounting Textbook',
       description: 'UoL official module book. Some highlighting on pages but overall clean and complete.',
       price: 25, category: 'Books',
-      images: ['https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=800&h=600&fit=crop'],
+      images: ['https://images.unsplash.com/photo-1457369804613-52c61a468e7d?w=800&h=600&fit=crop'],
       condition: 'good', brand: '', location: 'Crown Place', tags: ['accounting', 'ACFI101']
     },
     {
       title: 'Introduction to Python Textbook',
       description: 'Programming textbook, COMP101. Clean copy with no annotations.',
       price: 20, category: 'Books',
-      images: ['https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800&h=600&fit=crop'],
+      images: ['https://images.unsplash.com/photo-1515879218367-8466d910aaa4?w=800&h=600&fit=crop'],
       condition: 'like-new', brand: '', location: 'Vine Court', tags: ['python', 'programming', 'COMP101']
     },
     {
@@ -106,35 +129,35 @@ if (!store.users.find(u => u.id === 'admin-001')) {
       title: 'Adidas Waterproof Backpack 30L',
       description: '30L capacity, laptop compartment, used 2 semesters. Still great condition.',
       price: 22, category: 'Clothing',
-      images: ['https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800&h=600&fit=crop'],
+      images: ['https://images.unsplash.com/photo-1622560480605-d83c853bc5c3?w=800&h=600&fit=crop'],
       condition: 'good', brand: 'Adidas', location: 'Greenbank', tags: ['backpack', 'bag']
     },
     {
       title: 'IKEA FORSÅ Desk Lamp',
       description: 'White desk lamp, adjustable arm. Works perfectly, selling because moving out of halls.',
       price: 12, category: 'Furniture',
-      images: ['https://images.unsplash.com/photo-1507473885765-e6ed057f782c?w=800&h=600&fit=crop'],
+      images: ['https://images.unsplash.com/photo-1534189668023-c54d7305a752?w=800&h=600&fit=crop'],
       condition: 'good', brand: 'IKEA', location: 'Crown Place', tags: ['lamp', 'desk', 'ikea']
     },
     {
       title: 'Mini Fridge 40L',
       description: 'Perfect for student room. Runs quietly, keeps drinks cold. Moving out sale.',
       price: 45, category: 'Furniture',
-      images: ['https://images.unsplash.com/photo-1571175443880-49e1d25b2bc5?w=800&h=600&fit=crop'],
+      images: ['https://images.unsplash.com/photo-1584568694244-14fbdf83bd30?w=800&h=600&fit=crop'],
       condition: 'fair', brand: '', location: 'Vine Court', tags: ['fridge', 'kitchen']
     },
     {
       title: 'Yoga Mat + Resistance Bands',
       description: 'Purple yoga mat 6mm thick plus set of 5 resistance bands. Used one semester only.',
       price: 18, category: 'Sports',
-      images: ['https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?w=800&h=600&fit=crop'],
+      images: ['https://images.unsplash.com/photo-1601925228717-b8b673b3e52e?w=800&h=600&fit=crop'],
       condition: 'good', brand: '', location: 'Greenbank', tags: ['yoga', 'fitness', 'gym']
     },
     {
       title: 'Casio fx-991EX Calculator',
       description: 'Required for engineering/maths modules. Fully functional with fresh batteries.',
       price: 15, category: 'Stationery',
-      images: ['https://images.unsplash.com/photo-1564939558297-fc396f18e5c7?w=800&h=600&fit=crop'],
+      images: ['https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=800&h=600&fit=crop'],
       condition: 'good', brand: 'Casio', location: 'Carnatic Halls', tags: ['calculator', 'maths', 'engineering']
     }
   ];
@@ -155,14 +178,14 @@ if (!store.users.find(u => u.id === 'admin-001')) {
       location: p.location,
       tags: p.tags,
       sellerId: 'admin-001',
-      sellerName: 'admin',
+      sellerName: config.admin.username,
       status: 'approved',
       viewCount: 0,
       createdAt: now
     });
   }
 
-  save();
+  saveSync();
   console.log('[DB] Database initialised with seed data');
 }
 

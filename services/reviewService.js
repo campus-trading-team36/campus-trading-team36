@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
+const { cleanString, stripUnsafe } = require('../utils/validators');
 
 function createReview(productId, buyerId, buyerName, rating, comment) {
   const product = store.products.find(p => p.id === productId);
@@ -12,6 +13,8 @@ function createReview(productId, buyerId, buyerName, rating, comment) {
   const r = parseInt(rating);
   if (isNaN(r) || r < 1 || r > 5) return { success: false, message: 'Rating must be 1-5' };
 
+  const cleanComment = stripUnsafe(cleanString(comment, 500));
+
   const review = {
     id: uuidv4(),
     productId,
@@ -20,7 +23,7 @@ function createReview(productId, buyerId, buyerName, rating, comment) {
     sellerId: product.sellerId,
     sellerName: product.sellerName,
     rating: r,
-    comment: (comment || '').trim(),
+    comment: cleanComment,
     createdAt: new Date().toISOString()
   };
 

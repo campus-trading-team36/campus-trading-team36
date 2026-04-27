@@ -2,11 +2,18 @@ const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
 
 function recordView(userId, productId) {
+  // skip phantom entries - product must actually exist
+  if (!store.products.find(p => p.id === productId)) return;
   const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const recent = store.browsingHistory.find(
     h => h.userId === userId && h.productId === productId && h.viewedAt > thirtyMinsAgo
   );
-  if (recent) return;
+  if (recent) {
+    // refresh the timestamp so the user sees the most recent view first
+    recent.viewedAt = new Date().toISOString();
+    save();
+    return;
+  }
 
   store.browsingHistory.push({
     id: uuidv4(),

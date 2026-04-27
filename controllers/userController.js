@@ -2,12 +2,27 @@
 
 const userService = require("../services/userService");
 
-// POST /api/user/verify - Send email verification code
+// POST /api/user/verify - Send email verification code (for register)
 function sendVerifyCode(req, res) {
   const { email } = req.body;
-  const result = userService.sendVerification(email);
+  const result = userService.sendVerification(email, 'register');
   const status = result.success ? 200 : 400;
   res.status(status).json(result);
+}
+
+// POST /api/user/forgot - Send a code so the user can reset their password
+function sendResetCode(req, res) {
+  const { email } = req.body;
+  const result = userService.sendVerification(email, 'reset');
+  // always 200 here - we never want to leak whether the email is registered
+  res.status(200).json(result);
+}
+
+// POST /api/user/reset - Apply a new password using a reset code
+function resetPassword(req, res) {
+  const { email, code, password } = req.body;
+  const result = userService.resetPassword(email, code, password);
+  res.status(result.success ? 200 : 400).json(result);
 }
 
 // POST /api/user/register
@@ -39,10 +54,20 @@ function getProfile(req, res) {
   res.json(result);
 }
 
+// POST /api/user/password - change password while logged in
+function changePassword(req, res) {
+  const { currentPassword, newPassword } = req.body;
+  const result = userService.changePassword(req.user.id, currentPassword, newPassword);
+  res.status(result.success ? 200 : 400).json(result);
+}
+
 module.exports = {
   sendVerifyCode,
+  sendResetCode,
+  resetPassword,
   register,
   login,
   logout,
-  getProfile
+  getProfile,
+  changePassword
 };

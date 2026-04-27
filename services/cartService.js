@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
+const { cleanString, stripUnsafe } = require('../utils/validators');
 
 function addToCart(userId, productId, note) {
   const product = store.products.find(p => p.id === productId);
@@ -7,9 +8,11 @@ function addToCart(userId, productId, note) {
   if (product.status !== 'approved') return { success: false, message: 'Product is not available' };
   if (product.sellerId === userId) return { success: false, message: 'You cannot add your own product to cart' };
 
+  const safeNote = stripUnsafe(cleanString(note, 200));
+
   const existing = store.cart.find(c => c.userId === userId && c.productId === productId);
   if (existing) {
-    if (note !== undefined) existing.note = note;
+    if (note !== undefined) existing.note = safeNote;
     save();
     return { success: true, message: 'Cart updated' };
   }
@@ -18,7 +21,7 @@ function addToCart(userId, productId, note) {
     id: uuidv4(),
     userId,
     productId,
-    note: (note || '').trim(),
+    note: safeNote,
     addedAt: new Date().toISOString()
   });
   save();
@@ -39,7 +42,7 @@ function getCart(userId) {
     .sort((a, b) => new Date(b.addedAt) - new Date(a.addedAt))
     .map(c => {
       const product = store.products.find(p => p.id === c.productId);
-      return product ? { ...product, addedAt: c.addedAt, note: c.note } : null;
+      return (product && product.status === 'approved') ? { ...product, addedAt: c.addedAt, note: c.note } : null;
     })
     .filter(Boolean);
   return { success: true, data: items };

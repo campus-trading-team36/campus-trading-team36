@@ -1,3 +1,28 @@
+# dependencies
 node_modules/
+
+# runtime data - never commit
 data.json
+data.json.bak.*
+sessions.json
+uploads/
+
+# env
 .env
+
+# logs
+*.log
+npm-debug.log*
+
+# build / deploy artifacts
+*.tar.gz
+*.zip
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# claude code local cache
+.claude/

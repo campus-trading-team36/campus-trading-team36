@@ -12,7 +12,7 @@ function pendingProducts(req, res) {
 // POST /api/admin/products/:id/review
 function reviewProduct(req, res) {
   const { action, reason } = req.body;
-  const result = adminService.reviewProduct(req.params.id, action, reason);
+  const result = adminService.reviewProduct(req.params.id, action, reason, req.user);
   const status = result.success ? 200 : 400;
   res.status(status).json(result);
 }
@@ -21,6 +21,32 @@ function reviewProduct(req, res) {
 function allUsers(req, res) {
   const result = adminService.getAllUsers();
   res.json(result);
+}
+
+// POST /api/admin/users/:id/ban
+function banUser(req, res) {
+  const banned = req.body && req.body.banned !== undefined ? !!req.body.banned : true;
+  const result = adminService.setUserBanned(req.params.id, banned, req.user);
+  const status = result.success ? 200 : 400;
+  res.status(status).json(result);
+}
+
+// POST /api/admin/users/:id/role
+function setUserRole(req, res) {
+  const { role } = req.body || {};
+  const result = adminService.setUserRole(req.params.id, role, req.user);
+  const status = result.success ? 200 : 400;
+  res.status(status).json(result);
+}
+
+// DELETE /api/admin/users/:id
+function deleteUser(req, res) {
+  if (req.params.id === req.user.id) {
+    return res.status(400).json({ success: false, message: 'You cannot delete your own account' });
+  }
+  const result = adminService.deleteUser(req.params.id, req.user);
+  const status = result.success ? 200 : 400;
+  res.status(status).json(result);
 }
 
 // GET /api/admin/reports
@@ -49,12 +75,22 @@ function allProducts(req, res) {
   res.json(result);
 }
 
+// GET /api/admin/log?limit=100
+function auditLog(req, res) {
+  const result = adminService.getAuditLog(req.query.limit);
+  res.json(result);
+}
+
 module.exports = {
   pendingProducts,
   reviewProduct,
   allUsers,
+  banUser,
+  setUserRole,
+  deleteUser,
   allReports,
   handleReport,
   stats,
-  allProducts
+  allProducts,
+  auditLog
 };

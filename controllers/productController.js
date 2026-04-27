@@ -2,6 +2,7 @@
 
 const productService = require('../services/productService');
 const { store, save } = require('../models/db');
+const { sessions, extractToken } = require('../middleware/auth');
 
 function list(req, res) {
   const result = productService.getProducts(req.query);
@@ -9,7 +10,12 @@ function list(req, res) {
 }
 
 function detail(req, res) {
-  const result = productService.getProductById(req.params.id);
+  // pass current viewer (if any) so we don't bump the seller's own viewCount
+  let viewerId = null;
+  const tok = extractToken(req);
+  if (tok && sessions[tok]) viewerId = sessions[tok].userId;
+
+  const result = productService.getProductById(req.params.id, viewerId);
   res.status(result.success ? 200 : 404).json(result);
 }
 
@@ -21,7 +27,9 @@ function create(req, res) {
 function update(req, res) {
   const result = productService.updateProduct(req.params.id, req.user.id, req.body);
   if (!result.success) {
-    const code = result.message.includes('only edit') ? 403 : 400;
+    let code = 400;
+    if (result.message.includes('only edit')) code = 403;
+    else if (result.message.includes('not found')) code = 404;
     return res.status(code).json(result);
   }
   res.json(result);
@@ -50,24 +58,27 @@ function addFavorite(req, res) {
   if (!product) {
     return res.status(404).json({ success: false, message: 'Product not found' });
   }
-  // BUG-03 fix: only approved products can be favourited
   if (product.status !== 'approved') {
     return res.status(400).json({ success: false, message: 'Only approved products can be added to favourites' });
   }
+  if (product.sellerId === req.user.id) {
+    return res.status(400).json({ success: false, message: 'You cannot favourite your own listing' });
+  }
 
   if (store.favorites.find(f => f.userId === req.user.id && f.productId === productId)) {
-    return res.json({ success: false, message: 'Already in favourites' });
+    return res.status(409).json({ success: false, message: 'Already in favourites' });
   }
 
   store.favorites.push({ userId: req.user.id, productId, addedAt: new Date().toISOString() });
   save();
-  res.json({ success: true, message: 'Added to favourites' });
+  res.status(201).json({ success: true, message: 'Added to favourites' });
 }
 
 function removeFavorite(req, res) {
   const { productId } = req.body;
+  if (!productId) return res.status(400).json({ success: false, message: 'productId is required' });
   const idx = store.favorites.findIndex(f => f.userId === req.user.id && f.productId === productId);
-  if (idx === -1) return res.json({ success: false, message: 'Not in favourites' });
+  if (idx === -1) return res.status(404).json({ success: false, message: 'Not in favourites' });
   store.favorites.splice(idx, 1);
   save();
   res.json({ success: true, message: 'Removed from favourites' });
@@ -79,12 +90,18 @@ function getFavorites(req, res) {
     const product = store.products.find(p => p.id === fav.productId);
     return product ? { ...product, addedAt: fav.addedAt } : null;
   }).filter(Boolean);
+  // keep sold products in favourites list (show SOLD badge) so users see why they can't buy
   res.json({ success: true, data: items });
 }
 
 function markSold(req, res) {
   const result = productService.markAsSold(req.params.id, req.user.id);
-  res.status(result.success ? 200 : 400).json(result);
+  if (!result.success) {
+    const code = result.message.includes('only manage') ? 403 :
+      (result.message.includes('not found') ? 404 : 400);
+    return res.status(code).json(result);
+  }
+  res.json(result);
 }
 
 function getStats(req, res) {

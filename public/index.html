@@ -645,6 +645,7 @@ let chatPartnerId = null;
 let myListingsCache = [];
 let myStatusFilter = 'all';
 let searchTimer = null;
+const productCache = {};
 let editingId = null;
 let uploadedImageUrls = [];
 let currentTags = [];
@@ -657,13 +658,41 @@ window.onload = function() {
   loadProducts();
   bindCats();
   loadBannerStats();
+  refreshUnreadBadge();
+  // poll for new messages every 60s while the tab is open
+  setInterval(refreshUnreadBadge, 60 * 1000);
 };
+
+// poll the unread-count endpoint and tag the Messages nav button
+function refreshUnreadBadge() {
+  if (!me) return;
+  fetch(API + '/messages/unread', { headers: ah() })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (!d || !d.success) return;
+      const n = (d.data && d.data.unread) || 0;
+      // find the nav button by text content - we don't change the HTML structure, just decorate it
+      const btns = document.querySelectorAll('#navLinks button');
+      for (const b of btns) {
+        if (b.textContent.indexOf('Messages') === 0) {
+          b.textContent = n > 0 ? ('Messages (' + n + ')') : 'Messages';
+          break;
+        }
+      }
+    }).catch(() => {});
+}
 
 function toggleNav() { document.getElementById('navLinks').classList.toggle('open'); }
 function closeNav() { document.getElementById('navLinks').classList.remove('open'); }
 
 function ah() { return { 'Content-Type': 'application/json', ...(me ? { 'Authorization': 'Bearer ' + me.token } : {}) }; }
 function ahNoContent() { return { ...(me ? { 'Authorization': 'Bearer ' + me.token } : {}) }; }
+function apiFetch(url, opts) {
+  return fetch(url, opts).then(r => {
+    if (r.status === 401) { clearMe(); showPage('loginPage'); toast('Session expired, please log in again', 'error'); return Promise.reject('401'); }
+    return r.json();
+  });
+}
 function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function ft(d) { if (!d) return ''; const x = new Date(d), n = new Date(); return x.toDateString() === n.toDateString() ? x.toTimeString().slice(0,5) : x.getDate() + '/' + (x.getMonth()+1) + '/' + x.getFullYear(); }
 function saveMe(d) { me = d; localStorage.setItem('ct_user', JSON.stringify(d)); updateNav(); }
@@ -763,14 +792,18 @@ function doLogin() {
   fetch(API + '/user/login', { method: 'POST', headers: ah(), body: JSON.stringify({ email, password }) })
     .then(r => r.json())
     .then(d => {
-      if (d.success) { saveMe(d.data); toast('Welcome back, ' + d.data.user.username + '!', 'success'); showPage('home'); }
+      if (d.success) { saveMe(d.data); toast('Welcome back, ' + d.data.user.username + '!', 'success'); showPage('home'); refreshUnreadBadge(); }
       else { setMsg('loginMsg', d.message, true); }
     }).catch(() => setMsg('loginMsg', 'Network error', true));
 }
 
 function doLogout() {
   if (me) fetch(API + '/user/logout', { method: 'POST', headers: ah() }).catch(() => {});
-  clearMe(); toast('Logged out', 'info'); showPage('home');
+  clearMe();
+  // also restore the Messages label so a stale unread count doesn't linger
+  const btns = document.querySelectorAll('#navLinks button');
+  for (const b of btns) { if (b.textContent.indexOf('Messages') === 0) { b.textContent = 'Messages'; break; } }
+  toast('Logged out', 'info'); showPage('home');
 }
 
 function loadProfile() {
@@ -778,6 +811,15 @@ function loadProfile() {
   document.getElementById('profileAvatar').textContent = me.user.username[0].toUpperCase();
   document.getElementById('profileName').textContent = me.user.username;
   document.getElementById('profileEmail').textContent = me.user.email;
+
+  fetch(API + '/user/profile', { headers: ah() })
+    .then(r => r.json())
+    .then(d => {
+      if (d.success && d.data.createdAt) {
+        const joined = new Date(d.data.createdAt);
+        document.getElementById('profileJoined').textContent = 'Joined ' + joined.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+      }
+    }).catch(() => {});
 
   fetch(API + '/user/stats', { headers: ah() })
     .then(r => r.json())
@@ -866,6 +908,7 @@ function renderGrid(items, gridId, isMine) {
     return;
   }
   list.forEach(item => {
+    productCache[item.id] = item;
     const img = (item.images && item.images[0]) || item.image || ('https://picsum.photos/seed/' + item.id.slice(0,8) + '/400/300');
     const card = document.createElement('div');
     card.className = 'card';
@@ -882,7 +925,7 @@ function renderGrid(items, gridId, isMine) {
         '</div>';
     } else {
       footer = '<button class="fav-btn" onclick="event.stopPropagation();quickFav(\'' + item.id + '\')" title="Favourite">♡</button>' +
-        '<button class="btn-sm primary" onclick="event.stopPropagation();openDetail(' + JSON.stringify(item).replace(/"/g,'&quot;') + ')">Details</button>';
+        '<button class="btn-sm primary" onclick="event.stopPropagation();openDetail(productCache[\'' + item.id + '\'])">Details</button>';
     }
 
     const condC = item.condition ? 'cond-' + item.condition : '';
@@ -1084,14 +1127,14 @@ function markSold(productId) {
 
 function deleteProduct(productId) {
   if (!confirm('Delete this listing? This cannot be undone.')) return;
-  fetch(API + '/products/' + productId, { method: 'DELETE', headers: ah() })
-    .then(r => r.json())
+  apiFetch(API + '/products/' + productId, { method: 'DELETE', headers: ah() })
     .then(d => { toast(d.message, d.success ? 'success' : 'error'); if (d.success) loadMyListings(); })
-    .catch(() => toast('Network error', 'error'));
+    .catch(e => { if (e !== '401') toast('Network error', 'error'); });
 }
 
 // === DETAIL MODAL ===
 function openDetail(item) {
+  if (!item || !item.id) { toast('Item unavailable', 'error'); return; }
   openProduct = item;
   const images = (item.images && item.images.length) ? item.images : (item.image ? [item.image] : []);
   const mainImg = document.getElementById('detailMainImg');
@@ -1245,18 +1288,20 @@ function loadFavs() {
       }
       let total = 0;
       d.data.forEach(item => {
-        total += item.price;
+        productCache[item.id] = item;
+        if (item.status === 'approved') total += item.price;
         const img = (item.images && item.images[0]) || item.image || ('https://picsum.photos/seed/' + item.id.slice(0,8) + '/400/300');
         const div = document.createElement('div');
         div.className = 'fav-item';
+        const soldBadge = item.status === 'sold' ? '<span class="badge badge-sold" style="margin-left:6px;">SOLD</span>' : '';
         div.innerHTML =
           '<img src="' + esc(img) + '" onerror="this.src=\'https://picsum.photos/seed/' + item.id.slice(0,8) + '/400/300\'" loading="lazy">' +
           '<div class="fav-info">' +
-            '<div class="fav-title">' + esc(item.title) + '</div>' +
+            '<div class="fav-title">' + esc(item.title) + soldBadge + '</div>' +
             '<div class="fav-price">£' + item.price + '</div>' +
             '<div class="fav-sub">by ' + esc(item.sellerName || '—') + ' · ' + esc(item.category) + (item.condition ? ' · ' + condLabel(item.condition) : '') + '</div>' +
             '<div class="fav-actions">' +
-              '<button class="btn-sm primary" onclick="openDetail(' + JSON.stringify(item).replace(/"/g,'&quot;') + ')">View</button>' +
+              '<button class="btn-sm primary" onclick="openDetail(productCache[\'' + item.id + '\'])">View</button>' +
               '<button class="btn-sm outline" onclick="msgFromFav(\'' + item.sellerId + '\',\'' + esc(item.sellerName) + '\')">Message</button>' +
               '<button class="btn-sm danger" onclick="removeFav(\'' + item.id + '\')">✕ Remove</button>' +
             '</div>' +
@@ -1300,6 +1345,7 @@ function loadCart() {
       let total = 0;
       d.data.forEach(item => {
         total += item.price;
+        productCache[item.id] = item;
         const img = (item.images && item.images[0]) || item.image || ('https://picsum.photos/seed/' + item.id.slice(0,8) + '/400/300');
         const div = document.createElement('div');
         div.className = 'fav-item';
@@ -1311,8 +1357,8 @@ function loadCart() {
             '<div class="fav-sub">by ' + esc(item.sellerName || '—') + ' · ' + esc(item.category) + '</div>' +
             (item.note ? '<div class="cart-note">📝 ' + esc(item.note) + '</div>' : '') +
             '<div class="fav-actions">' +
-              '<button class="btn-sm primary" onclick="openDetail(' + JSON.stringify(item).replace(/"/g,'&quot;') + ')">View</button>' +
-              '<button class="btn-sm outline" onclick="msgFromFav(\'' + item.sellerId + '\',\'' + esc(item.sellerName) + '\')">Message</button>' +
+              '<button class="btn-sm primary" onclick="openDetail(productCache[\'' + item.id + '\'])">View</button>' +
+              '<button class="btn-sm outline" onclick="msgFromFav(\'' + item.sellerId + '\',\'' + esc(item.sellerName || '') + '\')">Message</button>' +
               '<button class="btn-sm danger" onclick="removeFromCart(\'' + item.id + '\')">✕ Remove</button>' +
             '</div>' +
           '</div>';
@@ -1392,17 +1438,19 @@ function loadConversations() {
       d.data.forEach(conv => {
         const div = document.createElement('div');
         div.className = 'conv-item';
+        const safeName = conv.partnerName || 'Unknown';
+        const initial = (safeName.charAt(0) || '?').toUpperCase();
         div.innerHTML =
-          '<div class="conv-av">' + (conv.partnerName[0] || '?').toUpperCase() + '</div>' +
+          '<div class="conv-av">' + esc(initial) + '</div>' +
           '<div class="conv-body">' +
             '<div class="conv-top">' +
-              '<span class="conv-name">' + esc(conv.partnerName) + '</span>' +
+              '<span class="conv-name">' + esc(safeName) + '</span>' +
               '<span class="conv-time">' + ft(conv.lastMessage && conv.lastMessage.createdAt) + '</span>' +
             '</div>' +
-            '<div class="conv-preview">' + esc((conv.lastMessage && conv.lastMessage.content || '').substring(0, 55)) + '</div>' +
+            '<div class="conv-preview">' + esc(((conv.lastMessage && conv.lastMessage.content) || '').substring(0, 55)) + '</div>' +
           '</div>' +
           (conv.unreadCount > 0 ? '<div class="unread"></div>' : '');
-        div.onclick = () => openChat(conv.partnerId, conv.partnerName);
+        div.onclick = () => openChat(conv.partnerId, safeName);
         el.appendChild(div);
       });
     }).catch(() => {});
@@ -1410,9 +1458,13 @@ function loadConversations() {
 
 function openChat(partnerId, partnerName) {
   chatPartnerId = partnerId;
-  document.getElementById('chatPartner').textContent = partnerName;
+  document.getElementById('chatPartner').textContent = partnerName || 'Unknown';
   showPage('chatPage');
   loadChat();
+  // mark this thread read on the server too, so the nav badge clears
+  fetch(API + '/messages/read/' + partnerId, { method: 'POST', headers: ah() })
+    .then(() => refreshUnreadBadge())
+    .catch(() => {});
 }
 
 function loadChat() {
@@ -1498,9 +1550,40 @@ function submitReview() {
       if (d.success) {
         toast('Review submitted!', 'success');
         document.getElementById('reviewOverlay').classList.remove('show');
-        openDetail(openProduct);
+        if (openProduct) refreshReviews(openProduct);
       } else { setMsg('reviewMsg', d.message, true); }
     }).catch(() => setMsg('reviewMsg', 'Network error', true));
+}
+
+function refreshReviews(item) {
+  fetch(API + '/review/seller/' + item.sellerId).then(r => r.json()).then(d => {
+    if (d.success && d.data.count > 0) {
+      const el = document.getElementById('detailSellerRating');
+      if (el) el.textContent = '⭐ ' + d.data.avgRating + ' (' + d.data.count + ')';
+    }
+  }).catch(() => {});
+  fetch(API + '/review/product/' + item.id).then(r => r.json()).then(d => {
+    if (!d.success) return;
+    const reviews = d.data;
+    const countEl = document.getElementById('reviewCount');
+    if (countEl) countEl.textContent = reviews.length ? '(' + reviews.length + ')' : '(no reviews yet)';
+    const listEl = document.getElementById('reviewsList');
+    if (!listEl) return;
+    if (!reviews.length) {
+      listEl.innerHTML = '<p class="text-muted" style="font-size:13px;">No reviews yet for this listing.</p>';
+    } else {
+      listEl.innerHTML = reviews.slice(0, 3).map(r =>
+        '<div class="review-item">' +
+          '<div class="review-top">' +
+            '<span class="review-author">' + esc(r.buyerName) + '</span>' +
+            '<span class="review-rating">' + '★'.repeat(r.rating) + '☆'.repeat(5-r.rating) + '</span>' +
+            '<span class="review-date">' + ft(r.createdAt) + '</span>' +
+          '</div>' +
+          (r.comment ? '<div class="review-comment">' + esc(r.comment) + '</div>' : '') +
+        '</div>'
+      ).join('');
+    }
+  }).catch(() => {});
 }
 
 // === ADMIN ===
@@ -1537,6 +1620,7 @@ function loadAdminStats() {
       document.getElementById('statsRow').innerHTML =
         astat('👥', s.totalUsers, 'Users') +
         astat('🛍️', s.totalProducts, 'Products') +
+        astat('⏳', s.pendingProducts || 0, 'Pending Review') +
         astat('✅', s.approvedProducts, 'Live') +
         astat('💰', s.soldProducts || 0, 'Sold') +
         astat('🚩', s.pendingReports, 'Reports') +
@@ -1613,10 +1697,20 @@ function loadAllProducts() {
         el.innerHTML = '<div class="empty-state"><div class="empty-icon">🛍️</div>No products</div>';
         return;
       }
-      d.data.forEach(p => {
+      // sort pending first so admins can review them quickly
+      const sorted = d.data.slice().sort((a, b) => {
+        if (a.status === 'pending' && b.status !== 'pending') return -1;
+        if (b.status === 'pending' && a.status !== 'pending') return 1;
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      });
+      sorted.forEach(p => {
         const img = (p.images && p.images[0]) || p.image || ('https://picsum.photos/seed/' + p.id.slice(0,8) + '/400/300');
         const div = document.createElement('div');
         div.className = 'admin-row';
+        const reviewBtns = p.status === 'pending'
+          ? '<button class="btn-sm green" onclick="adminReview(\'' + p.id + '\',\'approve\')">Approve</button>' +
+            '<button class="btn-sm danger" onclick="adminReview(\'' + p.id + '\',\'reject\')">Reject</button>'
+          : '';
         div.innerHTML =
           '<img src="' + esc(img) + '" onerror="this.src=\'https://picsum.photos/seed/' + p.id.slice(0,8) + '/400/300\'" loading="lazy">' +
           '<div class="admin-info">' +
@@ -1625,6 +1719,7 @@ function loadAllProducts() {
             '<div class="sub">' + ft(p.createdAt) + ' · ' + (p.viewCount || 0) + ' views</div>' +
           '</div>' +
           '<div class="admin-btns">' +
+            reviewBtns +
             '<button class="btn-sm danger" onclick="adminDelete(\'' + p.id + '\')">Delete</button>' +
           '</div>';
         el.appendChild(div);
@@ -1632,12 +1727,24 @@ function loadAllProducts() {
     }).catch(() => {});
 }
 
-function adminDelete(id) {
-  if (!confirm('Delete this product?')) return;
-  fetch(API + '/products/' + id, { method: 'DELETE', headers: ah() })
+function adminReview(id, action) {
+  let reason = '';
+  if (action === 'reject') {
+    reason = prompt('Reason for rejection (optional):') || '';
+  }
+  fetch(API + '/admin/products/' + id + '/review', {
+    method: 'POST', headers: ah(), body: JSON.stringify({ action, reason })
+  })
     .then(r => r.json())
     .then(d => { toast(d.message, d.success ? 'success' : 'error'); loadAllProducts(); loadAdminStats(); })
-    .catch(() => {});
+    .catch(() => toast('Network error', 'error'));
+}
+
+function adminDelete(id) {
+  if (!confirm('Delete this product?')) return;
+  apiFetch(API + '/products/' + id, { method: 'DELETE', headers: ah() })
+    .then(d => { toast(d.message, d.success ? 'success' : 'error'); loadAllProducts(); loadAdminStats(); })
+    .catch(e => { if (e !== '401') toast('Network error', 'error'); });
 }
 
 function overlayClick(e, id) {

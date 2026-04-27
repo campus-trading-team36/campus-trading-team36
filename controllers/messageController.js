@@ -22,14 +22,30 @@ function conversations(req, res) {
   res.json(result);
 }
 
-// GET /api/messages/chat/:partnerId
+// GET /api/messages/chat/:partnerId?limit=200
 function chatHistory(req, res) {
-  const result = messageService.getChatHistory(req.user.id, req.params.partnerId);
+  const result = messageService.getChatHistory(req.user.id, req.params.partnerId, { limit: req.query.limit });
+  const status = result.success ? 200 : (result.message && result.message.includes('not found') ? 404 : 400);
+  res.status(status).json(result);
+}
+
+// GET /api/messages/unread
+function unread(req, res) {
+  const result = messageService.getUnreadCount(req.user.id);
   res.json(result);
+}
+
+// POST /api/messages/read/:partnerId - mark a whole conversation as read in one go
+function markRead(req, res) {
+  const result = messageService.markConversationRead(req.user.id, req.params.partnerId);
+  const status = result.success ? 200 : (result.message && result.message.includes('not found') ? 404 : 400);
+  res.status(status).json(result);
 }
 
 module.exports = {
   send,
   conversations,
-  chatHistory
+  chatHistory,
+  unread,
+  markRead
 };

@@ -2,84 +2,124 @@
 
 const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
-const config = require('../config');
-const { createSession, removeSession } = require('../middleware/auth');
-
-function isUniversityEmail(email) {
-  if (!email || !email.includes('@')) return false;
-  const domain = email.split('@')[1].toLowerCase();
-  return config.emailDomains.includes(domain);
-}
+const { createSession, removeSession, removeUserSessions } = require('../middleware/auth');
+const { hashPassword, verifyPassword, isHashed } = require('../utils/security');
+const {
+  cleanString, isValidEmail, isValidUsername, isStrongEnoughPassword, isDevMode
+} = require('../utils/validators');
 
 function generateCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-// send verification code
-// for demo the code is returned in the response body so testers can copy it
-function sendVerification(email) {
-  // BUG-01 fix: normalise to lowercase so ABC@liverpool.ac.uk == abc@liverpool.ac.uk
+// prune expired verification codes - keeps the store tidy
+function pruneExpiredCodes() {
+  const now = Date.now();
+  const before = store.verifyCodes.length;
+  store.verifyCodes = store.verifyCodes.filter(v => v.expiresAt > now);
+  if (store.verifyCodes.length !== before) save();
+}
+setInterval(pruneExpiredCodes, 30 * 60 * 1000).unref();
+
+// purpose can be 'register' (default) or 'reset' for password reset
+function sendVerification(email, purpose) {
   email = (email || '').toLowerCase().trim();
-  if (!isUniversityEmail(email)) {
+  if (!isValidEmail(email)) {
     return { success: false, message: 'Please use your university email (@liverpool.ac.uk)' };
+  }
+  purpose = purpose === 'reset' ? 'reset' : 'register';
+
+  if (purpose === 'reset' && !store.users.find(u => u.email === email)) {
+    // do not reveal whether the email is registered to a stranger
+    return { success: true, message: 'If that email is registered, a reset code has been sent' };
+  }
+
+  // throttle - one code every 30s per email + purpose
+  const recent = store.verifyCodes.find(v =>
+    v.email === email && v.purpose === purpose && (Date.now() - (v.issuedAt || 0)) < 30 * 1000
+  );
+  if (recent) {
+    return { success: false, message: 'Please wait before requesting a new code' };
   }
 
   const code = generateCode();
   const expiresAt = Date.now() + 10 * 60 * 1000; // 10 mins
 
-  // remove old code for this email if any
-  const idx = store.verifyCodes.findIndex(v => v.email === email);
-  if (idx !== -1) store.verifyCodes.splice(idx, 1);
+  // remove any old code for this email + purpose
+  for (let i = store.verifyCodes.length - 1; i >= 0; i--) {
+    if (store.verifyCodes[i].email === email && store.verifyCodes[i].purpose === purpose) {
+      store.verifyCodes.splice(i, 1);
+    }
+  }
 
-  store.verifyCodes.push({ email, code, expiresAt });
+  store.verifyCodes.push({ email, code, expiresAt, issuedAt: Date.now(), attempts: 0, purpose });
   save();
 
-  console.log(`[Email Verification] ${email} -> code: ${code}`);
-  // in real project you'd send an actual email here (nodemailer etc.)
+  console.log(`[Email Verification] ${purpose} ${email} -> code: ${code}`);
 
-  return { success: true, message: 'Verification code sent', code };
+  // only echo the code in dev/demo - never in production
+  const out = { success: true, message: 'Verification code sent' };
+  if (isDevMode()) out.code = code;
+  return out;
 }
 
 function register(username, email, password, verifyCode) {
-  // normalise email - same fix as sendVerification
   email = (email || '').toLowerCase().trim();
-  username = (username || '').trim();
+  username = cleanString(username, 20);
+  password = String(password || '');
+
   if (!username || !email || !password) {
     return { success: false, message: 'All fields are required' };
   }
-  if (username.length < 2 || username.length > 20) {
-    return { success: false, message: 'Username must be 2-20 characters' };
+  if (!isValidUsername(username)) {
+    return { success: false, message: 'Username must be 2-20 characters (letters, numbers, _, -)' };
   }
-  if (password.length < 6) {
-    return { success: false, message: 'Password must be at least 6 characters' };
+  if (!isStrongEnoughPassword(password)) {
+    return { success: false, message: 'Password must be 6-64 chars and contain a letter and a number' };
   }
-  if (!isUniversityEmail(email)) {
+  if (!isValidEmail(email)) {
     return { success: false, message: 'Please use your university email' };
   }
 
   if (store.users.find(u => u.email === email)) {
     return { success: false, message: 'This email is already registered' };
   }
-  if (store.users.find(u => u.username === username)) {
+  if (store.users.find(u => u.username.toLowerCase() === username.toLowerCase())) {
     return { success: false, message: 'Username is taken' };
   }
 
-  // check verify code
-  const record = store.verifyCodes.find(v => v.email === email && v.code === verifyCode);
-  if (!record) return { success: false, message: 'Invalid verification code' };
-  if (Date.now() > record.expiresAt) return { success: false, message: 'Verification code expired' };
+  // check verify code (purpose=register)
+  const record = store.verifyCodes.find(v => v.email === email && v.purpose === 'register');
+  if (!record) return { success: false, message: 'Please request a verification code first' };
+  if (Date.now() > record.expiresAt) {
+    store.verifyCodes.splice(store.verifyCodes.indexOf(record), 1);
+    save();
+    return { success: false, message: 'Verification code expired, please request a new one' };
+  }
 
-  // remove used code
+  record.attempts = (record.attempts || 0) + 1;
+  if (record.attempts > 5) {
+    store.verifyCodes.splice(store.verifyCodes.indexOf(record), 1);
+    save();
+    return { success: false, message: 'Too many failed attempts, please request a new code' };
+  }
+  if (record.code !== String(verifyCode || '').trim()) {
+    save();
+    return { success: false, message: 'Invalid verification code' };
+  }
+
   store.verifyCodes.splice(store.verifyCodes.indexOf(record), 1);
 
   const newUser = {
     id: uuidv4(),
     username,
     email,
-    password, // TODO: use bcrypt in production
+    password: hashPassword(password),
     role: 'user',
     verified: true,
-    createdAt: new Date().toISOString()
+    banned: false,
+    createdAt: new Date().toISOString(),
+    lastLoginAt: null
   };
 
   store.users.push(newUser);
@@ -97,10 +137,26 @@ function login(email, password) {
   if (!email || !password) {
     return { success: false, message: 'Email and password are required' };
   }
-  // lowercase email so Admin@Liverpool.ac.uk still logs in
-  email = email.toLowerCase().trim();
-  const user = store.users.find(u => u.email === email && u.password === password);
+  email = String(email).toLowerCase().trim();
+  password = String(password);
+
+  const user = store.users.find(u => u.email === email);
   if (!user) return { success: false, message: 'Invalid email or password' };
+
+  if (user.banned) {
+    return { success: false, message: 'This account has been suspended. Contact admin for help.' };
+  }
+
+  if (!verifyPassword(password, user.password)) {
+    return { success: false, message: 'Invalid email or password' };
+  }
+
+  // upgrade legacy plaintext passwords on successful login
+  if (!isHashed(user.password)) {
+    user.password = hashPassword(password);
+  }
+  user.lastLoginAt = new Date().toISOString();
+  save();
 
   const token = createSession(user.id);
   return {
@@ -111,7 +167,7 @@ function login(email, password) {
 }
 
 function logout(token) {
-  removeSession(token.replace('Bearer ', '').trim());
+  removeSession(String(token || '').replace(/^Bearer\s+/i, '').trim());
   return { success: true, message: 'Logged out' };
 }
 
@@ -120,8 +176,80 @@ function getProfile(userId) {
   if (!user) return { success: false, message: 'User not found' };
   return {
     success: true,
-    data: { id: user.id, username: user.username, email: user.email, role: user.role, createdAt: user.createdAt }
+    data: {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt || null
+    }
   };
 }
 
-module.exports = { sendVerification, register, login, logout, getProfile };
+// change password while logged in - requires current password
+function changePassword(userId, currentPassword, newPassword) {
+  const user = store.users.find(u => u.id === userId);
+  if (!user) return { success: false, message: 'User not found' };
+  if (!currentPassword || !newPassword) return { success: false, message: 'Current and new passwords are required' };
+  if (!verifyPassword(String(currentPassword), user.password)) {
+    return { success: false, message: 'Current password is incorrect' };
+  }
+  if (!isStrongEnoughPassword(newPassword)) {
+    return { success: false, message: 'New password must be 6-64 chars and contain a letter and a number' };
+  }
+  if (String(currentPassword) === String(newPassword)) {
+    return { success: false, message: 'New password must be different from the current one' };
+  }
+  user.password = hashPassword(String(newPassword));
+  save();
+  // force re-login on every device for safety
+  removeUserSessions(userId);
+  return { success: true, message: 'Password changed. Please log in again.' };
+}
+
+// reset password using a verification code - for users who forgot their password
+function resetPassword(email, code, newPassword) {
+  email = (email || '').toLowerCase().trim();
+  if (!isValidEmail(email)) return { success: false, message: 'Invalid email' };
+  if (!isStrongEnoughPassword(newPassword)) {
+    return { success: false, message: 'New password must be 6-64 chars and contain a letter and a number' };
+  }
+
+  const user = store.users.find(u => u.email === email);
+  // do not reveal if the email exists - return same generic error
+  const generic = { success: false, message: 'Invalid email or reset code' };
+  if (!user) return generic;
+
+  const record = store.verifyCodes.find(v => v.email === email && v.purpose === 'reset');
+  if (!record) return generic;
+  if (Date.now() > record.expiresAt) {
+    store.verifyCodes.splice(store.verifyCodes.indexOf(record), 1);
+    save();
+    return { success: false, message: 'Reset code expired, please request a new one' };
+  }
+
+  record.attempts = (record.attempts || 0) + 1;
+  if (record.attempts > 5) {
+    store.verifyCodes.splice(store.verifyCodes.indexOf(record), 1);
+    save();
+    return { success: false, message: 'Too many failed attempts, please request a new code' };
+  }
+  if (record.code !== String(code || '').trim()) {
+    save();
+    return generic;
+  }
+
+  store.verifyCodes.splice(store.verifyCodes.indexOf(record), 1);
+  user.password = hashPassword(String(newPassword));
+  save();
+  // force re-login everywhere
+  removeUserSessions(user.id);
+
+  return { success: true, message: 'Password reset successful, please log in' };
+}
+
+module.exports = {
+  sendVerification, register, login, logout, getProfile,
+  changePassword, resetPassword
+};

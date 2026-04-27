@@ -2,16 +2,20 @@
 
 const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
+const { cleanString, stripUnsafe } = require('../utils/validators');
+
+const VALID_TYPES = ['product', 'user'];
 
 function createReport(reporterId, reporterName, data) {
   if (!data.targetId || !data.reason) {
     return { success: false, message: 'Target and reason are required' };
   }
-  if (data.reason.length > 300) {
-    return { success: false, message: 'Reason too long (max 300 characters)' };
+  const reason = stripUnsafe(cleanString(data.reason, 300));
+  if (!reason || reason.length < 5) {
+    return { success: false, message: 'Reason must be 5-300 characters' };
   }
 
-  const targetType = data.targetType || 'product';
+  const targetType = VALID_TYPES.includes(data.targetType) ? data.targetType : 'product';
 
   if (targetType === 'product') {
     if (!store.products.find(p => p.id === data.targetId)) {
@@ -29,13 +33,30 @@ function createReport(reporterId, reporterName, data) {
   );
   if (existing) return { success: false, message: 'You already reported this item' };
 
+  // anti-spam: max 5 open reports per reporter at once
+  const openByMe = store.reports.filter(r => r.reporterId === reporterId && r.status === 'pending').length;
+  if (openByMe >= 5) {
+    return { success: false, message: 'You already have several open reports awaiting review' };
+  }
+
+  // snapshot target name so admin sees what was reported even if the item is later edited
+  let targetName = '';
+  if (targetType === 'product') {
+    const p = store.products.find(x => x.id === data.targetId);
+    targetName = p ? p.title : '';
+  } else {
+    const u = store.users.find(x => x.id === data.targetId);
+    targetName = u ? u.username : '';
+  }
+
   const report = {
     id: uuidv4(),
     reporterId,
     reporterName,
     targetId: data.targetId,
     targetType,
-    reason: data.reason.trim(),
+    targetName,
+    reason,
     status: 'pending',
     createdAt: new Date().toISOString(),
     resolvedAt: null
