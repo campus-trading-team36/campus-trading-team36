@@ -1,13 +1,12 @@
-// simple in-memory rate limiter
-// blocks an IP if it exceeds N requests in a sliding window
+// 简单的内存限流：同一个 IP 短时间内请求太多就 429
 
 function makeLimiter(opts) {
   const windowMs = opts.windowMs || 60 * 1000;
   const max = opts.max || 60;
   const message = opts.message || 'Too many requests, please slow down';
-  const buckets = new Map(); // ip -> [timestamps]
+  const buckets = new Map(); // ip -> [时间戳列表]
 
-  // sweep old entries every minute to keep memory bounded
+  // 每分钟清一下太老的记录，免得内存涨
   setInterval(() => {
     const cutoff = Date.now() - windowMs;
     for (const [ip, arr] of buckets.entries()) {

@@ -1,15 +1,17 @@
+// 浏览历史相关业务逻辑
+
 const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
 
 function recordView(userId, productId) {
-  // skip phantom entries - product must actually exist
+  // 商品不存在就不记录
   if (!store.products.find(p => p.id === productId)) return;
   const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const recent = store.browsingHistory.find(
     h => h.userId === userId && h.productId === productId && h.viewedAt > thirtyMinsAgo
   );
   if (recent) {
-    // refresh the timestamp so the user sees the most recent view first
+    // 30 分钟内重复看的，只更新一下时间戳，不另开一条记录
     recent.viewedAt = new Date().toISOString();
     save();
     return;

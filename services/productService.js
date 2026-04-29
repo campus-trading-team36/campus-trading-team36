@@ -1,4 +1,4 @@
-// product business logic
+// 商品相关的业务逻辑
 
 const fs = require('fs');
 const path = require('path');
@@ -11,8 +11,8 @@ const VALID_CATEGORIES = ['Electronics', 'Books', 'Clothing', 'Furniture', 'Spor
 const VALID_CONDITIONS = ['new', 'like-new', 'good', 'fair'];
 const UPLOADS_DIR = path.join(__dirname, '../uploads');
 
-// in-memory pending view-count increments, flushed every 30s
-// stops the JSON file being rewritten on every detail page view
+// 浏览量先记内存里，每 30 秒批量写一次 SQL
+// 不然每次打开商品都要写文件，太频繁
 const pendingViewBumps = new Map(); // productId -> count
 let viewFlushTimer = null;
 function scheduleViewFlush() {
@@ -30,14 +30,14 @@ function scheduleViewFlush() {
   }, 30 * 1000).unref();
 }
 
-// remove on-disk image files for the given product (best effort)
+// 删除商品时把 /uploads 里对应的图片文件也删掉
 function cleanupImages(product) {
   if (!product || !Array.isArray(product.images)) return;
   for (const url of product.images) {
     if (typeof url !== 'string') continue;
     if (!url.startsWith('/uploads/')) continue;
     const fileName = path.basename(url);
-    // basic safety check - no traversal
+    // 防一手路径穿越
     if (fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) continue;
     const full = path.join(UPLOADS_DIR, fileName);
     fs.unlink(full, err => {
@@ -105,11 +105,11 @@ function getProducts(query) {
 function getProductById(id, viewerId) {
   const product = store.products.find(p => p.id === id);
   if (!product) return { success: false, message: 'Product not found' };
-  // bump view count off the hot path - batched and flushed every 30s
+  // 卖家自己看不算浏览
   if (!viewerId || viewerId !== product.sellerId) {
     pendingViewBumps.set(id, (pendingViewBumps.get(id) || 0) + 1);
     scheduleViewFlush();
-    // show their own view immediately - flushed bumps are already in product.viewCount
+    // 当前这次浏览先 +1 给前端看，背后等批量写
     return {
       success: true,
       data: { ...product, viewCount: (product.viewCount || 0) + 1 }
@@ -118,7 +118,7 @@ function getProductById(id, viewerId) {
   return { success: true, data: product };
 }
 
-// flush pending view counts now (called on graceful shutdown)
+// 服务器关闭前把堆积的浏览数写下去
 function flushPendingViews() {
   if (pendingViewBumps.size === 0) return;
   for (const [id, n] of pendingViewBumps.entries()) {
@@ -126,9 +126,9 @@ function flushPendingViews() {
     if (p) p.viewCount = (p.viewCount || 0) + n;
   }
   pendingViewBumps.clear();
-  // use sync save so shutdown can't exit before the write lands
+  // 用 saveSync 保证退出前写完
   try { require('../models/db').saveSync(); }
-  catch { save(); } // fallback if saveSync isn't exported (shouldn't happen)
+  catch { save(); }
 }
 
 function createProduct(userId, userName, data) {
@@ -178,7 +178,7 @@ function createProduct(userId, userName, data) {
     tags,
     sellerId: userId,
     sellerName: userName,
-    // moderation: new listings start as pending unless disabled
+    // 默认是待审核，关掉审核就直接 approved
     status: config.moderationEnabled ? 'pending' : 'approved',
     viewCount: 0,
     createdAt: new Date().toISOString()
@@ -210,7 +210,8 @@ function updateProduct(productId, userId, data) {
     return { success: false, message: 'This listing was removed by an admin and cannot be edited' };
   }
 
-  // track if a "material" field changed - those re-trigger moderation
+  // 标记是不是改了重要字段（标题/价格/图片这些）
+  // 改了就要重新送审，改个错别字就别折腾了
   let materialChange = false;
 
   if (data.title !== undefined) {
@@ -260,8 +261,7 @@ function updateProduct(productId, userId, data) {
   }
 
   product.updatedAt = new Date().toISOString();
-  // re-trigger moderation only when something material changed
-  // (price tweaks/spelling fixes shouldn't keep dropping listings out of the grid)
+  // 只在重要字段变了的时候才重新送审
   const reReview = config.moderationEnabled && materialChange && product.status === 'approved';
   if (reReview) {
     product.status = 'pending';
@@ -296,7 +296,7 @@ function deleteProduct(productId, user) {
     if (store.browsingHistory[i].productId === productId) store.browsingHistory.splice(i, 1);
   }
 
-  // remove uploaded image files so they don't pile up
+  // 把这个商品的图片文件也删掉，不然 uploads 越堆越多
   cleanupImages(product);
 
   save();

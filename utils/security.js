@@ -1,5 +1,5 @@
-// password hashing using node's built-in crypto (PBKDF2)
-// no extra dependency needed
+// 密码哈希用 Node 自带的 crypto（PBKDF2）
+// 不用装额外的库
 
 const crypto = require('crypto');
 
@@ -8,7 +8,7 @@ const KEY_LEN = 32;
 const DIGEST = 'sha256';
 const SALT_LEN = 16;
 
-// hash a plaintext password, returns "iterations:salt:hash" string
+// 把明文密码哈希成 "iterations:salt:hash" 这个格式
 function hashPassword(plain) {
   if (!plain || typeof plain !== 'string') {
     throw new Error('Password must be a non-empty string');
@@ -18,11 +18,11 @@ function hashPassword(plain) {
   return `${ITERATIONS}:${salt}:${hash}`;
 }
 
-// check if a stored hash matches a plaintext password (timing-safe)
+// 校验密码（用 timingSafeEqual 防时序攻击）
 function verifyPassword(plain, stored) {
   if (!plain || !stored || typeof stored !== 'string') return false;
 
-  // legacy plaintext fallback (so old data still works during migration)
+  // 兼容老的明文密码（迁移过来的数据）
   if (!stored.includes(':')) {
     return plain === stored;
   }
@@ -46,12 +46,12 @@ function verifyPassword(plain, stored) {
   }
 }
 
-// returns true if value looks like a hashed password (not plaintext)
+// 判断这个值是不是已经哈希过的（不是明文）
 function isHashed(stored) {
   return typeof stored === 'string' && stored.split(':').length === 3;
 }
 
-// secure random token (used for session ids)
+// 生成 session token 的随机字符串
 function randomToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString('hex');
 }

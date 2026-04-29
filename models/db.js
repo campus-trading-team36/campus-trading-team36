@@ -1,6 +1,6 @@
-// data layer - SQLite-backed (better-sqlite3) with in-memory caches
-// the cached arrays keep the legacy `store + save()` API working,
-// while real persistence goes through SQL transactions.
+// 数据层 data layer - 用 SQLite 存数据
+// store 是内存里的副本，save() 把它写回 SQLite
+// 这样原来的代码不用改太多
 
 const fs = require('fs');
 const path = require('path');
@@ -142,8 +142,8 @@ db.exec(`
   );
 `);
 
-// ---------- row <-> object converters ----------
-// products store images & tags as JSON strings in SQL; we materialise arrays for service code
+// ---------- 行 <-> 对象转换 ----------
+// images 和 tags 在 SQL 里是 JSON 字符串，service 层用数组方便点
 function rowToProduct(r) {
   if (!r) return null;
   return {
@@ -167,7 +167,7 @@ function rowToMessage(r) {
   return { ...r, isRead: !!r.isRead };
 }
 
-// ---------- load everything into in-memory arrays ----------
+// ---------- 把所有数据读到内存 ----------
 function loadAll() {
   return {
     users: db.prepare('SELECT * FROM users').all().map(rowToUser),
@@ -185,11 +185,12 @@ function loadAll() {
   };
 }
 
-// ---------- one-time migration from legacy data.json ----------
+// ---------- 一次性迁移：把旧的 data.json 导入 SQLite ----------
+// 只有第一次启动会跑，跑完把旧文件改名免得重跑
 function migrateFromJson() {
   if (!fs.existsSync(LEGACY_JSON)) return false;
   const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-  if (userCount > 0) return false; // already migrated
+  if (userCount > 0) return false; // 已经迁移过了
 
   let json;
   try { json = JSON.parse(fs.readFileSync(LEGACY_JSON, 'utf8')); }
@@ -271,14 +272,14 @@ function migrateFromJson() {
     }
   });
   tx();
-  // archive the legacy file so we don't re-import next boot
+  // 老文件改名，下次启动就不会再迁移
   try { fs.renameSync(LEGACY_JSON, LEGACY_JSON + '.imported'); } catch {}
   console.log('[DB] migration complete, legacy file archived');
   return true;
 }
 migrateFromJson();
 
-// store is mutated in-place so other modules' references stay valid
+// store 是同一个对象，别的 module 拿到的引用始终有效
 const store = loadAll();
 function reload() {
   const fresh = loadAll();
@@ -287,9 +288,9 @@ function reload() {
   return store;
 }
 
-// ---------- save: full snapshot persisted in one transaction ----------
-// not the most write-efficient, but consistent & atomic; for this dataset
-// scale (hundreds of rows) it runs in well under 10ms.
+// ---------- save: 把整个 store 写回 SQLite ----------
+// 简单粗暴：DELETE 全部 + INSERT 全部，包在一个事务里
+// 数据量小所以没问题
 const saveTx = db.transaction(() => {
   db.exec('DELETE FROM users; DELETE FROM products; DELETE FROM messages; DELETE FROM reports; DELETE FROM favorites; DELETE FROM verify_codes; DELETE FROM reviews; DELETE FROM browsing_history; DELETE FROM cart; DELETE FROM admin_log;');
 
@@ -359,7 +360,7 @@ const saveTx = db.transaction(() => {
 
 let pendingSave = null;
 function save() {
-  // debounce: collapse rapid back-to-back saves into a single transaction
+  // 节流：短时间多次 save 合并成一次
   if (pendingSave) return;
   pendingSave = setImmediate(() => {
     pendingSave = null;
@@ -373,7 +374,7 @@ function saveSync() {
   saveTx();
 }
 
-// ---------- seed admin + sample products on first run ----------
+// ---------- 第一次启动：建管理员账号 + 一些示例商品 ----------
 if (!store.users.find(u => u.id === 'admin-001')) {
   const now = new Date().toISOString();
 

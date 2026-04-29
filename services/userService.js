@@ -1,4 +1,4 @@
-// user business logic
+// 用户相关业务逻辑
 
 const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
@@ -12,7 +12,7 @@ function generateCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-// prune expired verification codes - keeps the store tidy
+// 定期清理过期的验证码
 function pruneExpiredCodes() {
   const now = Date.now();
   const before = store.verifyCodes.length;
@@ -21,7 +21,7 @@ function pruneExpiredCodes() {
 }
 setInterval(pruneExpiredCodes, 30 * 60 * 1000).unref();
 
-// purpose can be 'register' (default) or 'reset' for password reset
+// purpose: 'register' 注册用，'reset' 找回密码用
 function sendVerification(email, purpose) {
   email = (email || '').toLowerCase().trim();
   if (!isValidEmail(email)) {
@@ -30,11 +30,11 @@ function sendVerification(email, purpose) {
   purpose = purpose === 'reset' ? 'reset' : 'register';
 
   if (purpose === 'reset' && !store.users.find(u => u.email === email)) {
-    // do not reveal whether the email is registered to a stranger
+    // 不告诉外人这个邮箱有没有注册过
     return { success: true, message: 'If that email is registered, a reset code has been sent' };
   }
 
-  // throttle - one code every 30s per email + purpose
+  // 限频：30秒内只能发一次
   const recent = store.verifyCodes.find(v =>
     v.email === email && v.purpose === purpose && (Date.now() - (v.issuedAt || 0)) < 30 * 1000
   );
@@ -43,9 +43,9 @@ function sendVerification(email, purpose) {
   }
 
   const code = generateCode();
-  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 mins
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 分钟过期
 
-  // remove any old code for this email + purpose
+  // 旧的同邮箱+用途的验证码先删掉
   for (let i = store.verifyCodes.length - 1; i >= 0; i--) {
     if (store.verifyCodes[i].email === email && store.verifyCodes[i].purpose === purpose) {
       store.verifyCodes.splice(i, 1);
@@ -57,7 +57,7 @@ function sendVerification(email, purpose) {
 
   console.log(`[Email Verification] ${purpose} ${email} -> code: ${code}`);
 
-  // only echo the code in dev/demo - never in production
+  // 开发/演示模式直接把验证码返回给前端方便测试，生产环境不会
   const out = { success: true, message: 'Verification code sent' };
   if (isDevMode()) out.code = code;
   return out;
@@ -151,7 +151,7 @@ function login(email, password) {
     return { success: false, message: 'Invalid email or password' };
   }
 
-  // upgrade legacy plaintext passwords on successful login
+  // 老用户密码可能是明文，登录成功时顺便升级成哈希
   if (!isHashed(user.password)) {
     user.password = hashPassword(password);
   }
@@ -203,12 +203,12 @@ function changePassword(userId, currentPassword, newPassword) {
   }
   user.password = hashPassword(String(newPassword));
   save();
-  // force re-login on every device for safety
+  // 改完密码强制所有设备重新登录
   removeUserSessions(userId);
   return { success: true, message: 'Password changed. Please log in again.' };
 }
 
-// reset password using a verification code - for users who forgot their password
+// 用户忘记密码时用验证码重设
 function resetPassword(email, code, newPassword) {
   email = (email || '').toLowerCase().trim();
   if (!isValidEmail(email)) return { success: false, message: 'Invalid email' };
@@ -217,7 +217,7 @@ function resetPassword(email, code, newPassword) {
   }
 
   const user = store.users.find(u => u.email === email);
-  // do not reveal if the email exists - return same generic error
+  // 邮箱存不存在都返回一样的报错，防止枚举
   const generic = { success: false, message: 'Invalid email or reset code' };
   if (!user) return generic;
 
@@ -243,7 +243,7 @@ function resetPassword(email, code, newPassword) {
   store.verifyCodes.splice(store.verifyCodes.indexOf(record), 1);
   user.password = hashPassword(String(newPassword));
   save();
-  // force re-login everywhere
+  // 重设完密码踢掉所有 session
   removeUserSessions(user.id);
 
   return { success: true, message: 'Password reset successful, please log in' };

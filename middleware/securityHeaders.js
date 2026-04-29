@@ -1,31 +1,28 @@
-// security headers (helmet-style, hand-rolled so no extra dependency)
+// 安全相关的 HTTP 头（自己手写，省得装 helmet）
 
 function securityHeaders(req, res, next) {
-  // stop browsers from sniffing the wrong mime type
+  // 防止浏览器猜错文件类型
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  // basic clickjacking protection
+  // 防止页面被嵌进 iframe
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  // legacy XSS filter (still respected by older browsers)
+  // 老浏览器的 XSS 过滤
   res.setHeader('X-XSS-Protection', '1; mode=block');
-  // limit referrer info leak to other origins
+  // 减少 referrer 信息泄露
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  // disable unused powerful APIs
+  // 禁掉用不到的浏览器能力
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 
-  // cache control for API responses (HTML page is allowed to cache)
+  // API 响应不要缓存
   if (req.path && req.path.indexOf('/api/') === 0) {
     res.setHeader('Cache-Control', 'no-store');
   }
 
-  // HSTS only when actually served over HTTPS - otherwise it's noise
-  // express sets req.secure when behind a trusted proxy with x-forwarded-proto=https
+  // HTTPS 才加 HSTS，HTTP 加了没用
   if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   }
 
-  // Content Security Policy
-  // the SPA uses inline scripts and inline styles, so we keep them allowed
-  // but everything else is locked down to same-origin + the photo CDNs we use
+  // CSP：SPA 里用了 inline script/style，所以放过这两个，其他都锁同源
   if (req.path && !req.path.startsWith('/api/') && !req.path.startsWith('/uploads/')) {
     res.setHeader(
       'Content-Security-Policy',

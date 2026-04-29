@@ -1,4 +1,4 @@
-// Report controller
+// 举报相关接口的 controller
 
 const reportService = require("../services/reportService");
 

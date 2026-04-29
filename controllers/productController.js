@@ -1,4 +1,4 @@
-// product controller
+// 商品相关接口的 controller
 
 const productService = require('../services/productService');
 const { store, save } = require('../models/db');
@@ -10,7 +10,7 @@ function list(req, res) {
 }
 
 function detail(req, res) {
-  // pass current viewer (if any) so we don't bump the seller's own viewCount
+  // 把当前登录的人传进去，免得把卖家自己的浏览也算进去
   let viewerId = null;
   const tok = extractToken(req);
   if (tok && sessions[tok]) viewerId = sessions[tok].userId;
@@ -90,7 +90,7 @@ function getFavorites(req, res) {
     const product = store.products.find(p => p.id === fav.productId);
     return product ? { ...product, addedAt: fav.addedAt } : null;
   }).filter(Boolean);
-  // keep sold products in favourites list (show SOLD badge) so users see why they can't buy
+  // 收藏列表里也保留已售的商品，前端会打 SOLD 标
   res.json({ success: true, data: items });
 }
 

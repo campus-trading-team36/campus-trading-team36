@@ -1,4 +1,4 @@
-// Message controller - handles messaging endpoints
+// 站内信相关接口的 controller
 
 const messageService = require("../services/messageService");
 
@@ -35,7 +35,7 @@ function unread(req, res) {
   res.json(result);
 }
 
-// POST /api/messages/read/:partnerId - mark a whole conversation as read in one go
+// POST /api/messages/read/:partnerId - 一次把和某人的对话全标记成已读
 function markRead(req, res) {
   const result = messageService.markConversationRead(req.user.id, req.params.partnerId);
   const status = result.success ? 200 : (result.message && result.message.includes('not found') ? 404 : 400);

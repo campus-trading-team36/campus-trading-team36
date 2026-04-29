@@ -1,3 +1,5 @@
+// 购物车相关业务逻辑
+
 const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
 const { cleanString, stripUnsafe } = require('../utils/validators');

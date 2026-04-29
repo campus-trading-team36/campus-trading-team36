@@ -1,6 +1,6 @@
-// minimal .env loader - no extra dependency
-// reads KEY=VALUE pairs from .env in project root, ignores comments and blank lines
-// values already set in process.env are preserved (real env wins over file)
+// 简单的 .env 加载器，省得装 dotenv
+// 读项目根目录下的 .env，按 KEY=VALUE 解析
+// 已经在 process.env 里的不会被覆盖
 
 const fs = require('fs');
 const path = require('path');
@@ -24,7 +24,7 @@ function loadEnv() {
     if (eq === -1) continue;
     const key = trimmed.slice(0, eq).trim();
     let val = trimmed.slice(eq + 1).trim();
-    // strip surrounding quotes
+    // 去掉两边的引号
     if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
       val = val.slice(1, -1);
     }

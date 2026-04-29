@@ -1,8 +1,8 @@
-// User controller - handles HTTP requests related to user operations
+// 用户相关接口的 controller
 
 const userService = require("../services/userService");
 
-// POST /api/user/verify - Send email verification code (for register)
+// POST /api/user/verify - 发注册用的验证码
 function sendVerifyCode(req, res) {
   const { email } = req.body;
   const result = userService.sendVerification(email, 'register');
@@ -10,15 +10,15 @@ function sendVerifyCode(req, res) {
   res.status(status).json(result);
 }
 
-// POST /api/user/forgot - Send a code so the user can reset their password
+// POST /api/user/forgot - 发重设密码的验证码
 function sendResetCode(req, res) {
   const { email } = req.body;
   const result = userService.sendVerification(email, 'reset');
-  // always 200 here - we never want to leak whether the email is registered
+  // 这里固定 200，不能让外人探出来邮箱有没有注册过
   res.status(200).json(result);
 }
 
-// POST /api/user/reset - Apply a new password using a reset code
+// POST /api/user/reset - 用验证码改密码
 function resetPassword(req, res) {
   const { email, code, password } = req.body;
   const result = userService.resetPassword(email, code, password);
@@ -54,7 +54,7 @@ function getProfile(req, res) {
   res.json(result);
 }
 
-// POST /api/user/password - change password while logged in
+// POST /api/user/password - 登录状态下改密码
 function changePassword(req, res) {
   const { currentPassword, newPassword } = req.body;
   const result = userService.changePassword(req.user.id, currentPassword, newPassword);

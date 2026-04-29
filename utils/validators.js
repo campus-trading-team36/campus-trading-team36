@@ -1,10 +1,10 @@
-// shared input validators / sanitisers
+// \u5404\u79cd\u8f93\u5165\u6821\u9a8c\u548c\u6e05\u6d17\u7684\u5de5\u5177\u51fd\u6570
 
 const config = require('../config');
 
 const USERNAME_RE = /^[a-zA-Z0-9_\-\u4e00-\u9fa5]{2,20}$/;
 
-// reject control chars, return trimmed string within len limits
+// \u53bb\u6389\u63a7\u5236\u5b57\u7b26\uff0ctrim\uff0c\u622a\u65ad\u5230 max \u957f\u5ea6
 function cleanString(v, max) {
   if (v === undefined || v === null) return '';
   let s = String(v).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '').trim();
@@ -25,7 +25,7 @@ function isValidUsername(name) {
 }
 
 function isStrongEnoughPassword(pwd) {
-  // student-level rule: at least 6 chars, must include letter and digit
+  // 简单规则：至少 6 位，得有字母也得有数字
   if (typeof pwd !== 'string') return false;
   if (pwd.length < 6 || pwd.length > 64) return false;
   return /[A-Za-z]/.test(pwd) && /\d/.test(pwd);
@@ -43,7 +43,7 @@ function clampFloat(v, min, max) {
   return Math.min(Math.max(n, min), max);
 }
 
-// strip script tags / iframe etc from user-provided text (defence in depth)
+// 把用户输入里的 script / iframe / on... 这些危险东西去掉（防 XSS 多一层保险）
 function stripUnsafe(s) {
   if (typeof s !== 'string') return '';
   return s
@@ -53,7 +53,7 @@ function stripUnsafe(s) {
     .replace(/on\w+\s*=/gi, '');
 }
 
-// is this request running in dev mode (used to expose helpful debug info)
+// 是不是开发模式（开发模式下接口会带一些方便调试的信息）
 function isDevMode() {
   const env = (process.env.NODE_ENV || '').toLowerCase();
   return env !== 'production';

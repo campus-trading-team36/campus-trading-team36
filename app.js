@@ -1,4 +1,5 @@
-// express app factory - separated from server.js so tests can import without binding a port
+// 把 Express app 单独抽出来
+// 这样测试用 supertest 可以直接 import，不用真启动服务器
 
 require('./utils/loadEnv')();
 
@@ -33,13 +34,13 @@ const corsOrigins = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',')
 app.use(cors({ origin: corsOrigins, credentials: false }));
 
 app.use(securityHeaders);
-// skip access logging during tests
+// 测试模式下不打日志，太吵
 if (process.env.NODE_ENV !== 'test') app.use(logger);
 
 app.use(express.json({ limit: config.jsonBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: config.jsonBodyLimit }));
 
-// rate limiting is disabled under NODE_ENV=test so test runs aren't throttled
+// 测试模式下也关掉限流，免得测试被 429 挡住
 if (process.env.NODE_ENV !== 'test') {
   app.use('/api/', makeLimiter({ windowMs: 60 * 1000, max: 200 }));
   const authLimiter = makeLimiter({ windowMs: 60 * 1000, max: 10, message: 'Too many login/registration attempts, please wait a minute' });

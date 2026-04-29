@@ -1,4 +1,4 @@
-// server entry - starts the http listener and handles graceful shutdown
+// 服务器入口：启动 HTTP 监听 + 处理优雅关闭
 
 const app = require('./app');
 const config = require('./config');

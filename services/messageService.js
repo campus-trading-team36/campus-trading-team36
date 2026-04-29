@@ -1,4 +1,4 @@
-// message service
+// 站内信相关业务逻辑
 
 const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
@@ -20,7 +20,7 @@ function sendMessage(senderId, senderName, receiverId, content, productId) {
   if (!receiver) return { success: false, message: 'Receiver not found' };
   if (receiver.banned) return { success: false, message: 'This user can no longer receive messages' };
 
-  // refuse messaging about a deleted/removed product
+  // 已经被删的商品不允许再发消息
   if (productId) {
     const p = store.products.find(x => x.id === productId);
     if (!p) return { success: false, message: 'Referenced product not found' };
@@ -45,7 +45,7 @@ function sendMessage(senderId, senderName, receiverId, content, productId) {
 }
 
 function getConversations(userId) {
-  // build a single user lookup map up front - much faster than .find per message
+  // 一次性建好用户查找表，比每条消息 .find 一次快很多
   const userMap = new Map();
   for (const u of store.users) userMap.set(u.id, u.username);
 
@@ -58,7 +58,7 @@ function getConversations(userId) {
     if (!convMap[otherId]) {
       convMap[otherId] = { partnerId: otherId, partnerName: otherName, lastMessage: msg, unreadCount: 0 };
     } else {
-      // keep partner name fresh in case it was renamed
+      // 用最新的名字（万一对方改过用户名）
       convMap[otherId].partnerName = otherName;
     }
 
@@ -78,7 +78,7 @@ function getConversations(userId) {
 
 function getChatHistory(userId, partnerId, opts) {
   if (!partnerId) return { success: false, message: 'partnerId required' };
-  // make sure partner is real - prevents crafted ids fishing for messages
+  // 检查对方是真实存在的用户，避免别人用伪造的 id 探别人的消息
   if (!store.users.find(u => u.id === partnerId)) {
     return { success: false, message: 'Partner not found' };
   }
@@ -90,7 +90,7 @@ function getChatHistory(userId, partnerId, opts) {
     (m.senderId === partnerId && m.receiverId === userId)
   );
 
-  // mark messages as read (only those addressed to me)
+  // 把发给我的消息标成已读（我自己发的就不动）
   let changed = false;
   for (const msg of history) {
     if (msg.receiverId === userId && !msg.isRead) {
@@ -101,7 +101,7 @@ function getChatHistory(userId, partnerId, opts) {
   if (changed) save();
 
   history.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-  // keep the last `limit` messages so old chats don't blow up the response
+  // 太老的聊天记录就不返回了，免得一次返回太多
   if (history.length > limit) history = history.slice(history.length - limit);
 
   return { success: true, data: history };
@@ -115,7 +115,7 @@ function getUnreadCount(userId) {
   return { success: true, data: { unread: count } };
 }
 
-// mark every message from a given partner as read - used when opening a conversation
+// 一次把跟某个人的全部未读都标成已读（打开聊天页时用）
 function markConversationRead(userId, partnerId) {
   if (!partnerId) return { success: false, message: 'partnerId required' };
   if (!store.users.find(u => u.id === partnerId)) {

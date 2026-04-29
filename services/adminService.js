@@ -1,9 +1,9 @@
-// admin service
+// 管理员后台相关业务逻辑
 
 const { store, save } = require('../models/db');
 const { removeUserSessions } = require('../middleware/auth');
 
-// keep a small audit trail of admin actions - useful for accountability
+// 记一下管理员都做了啥，方便追溯
 function logAction(actorId, actorName, action, targetType, targetId, detail) {
   if (!store.adminLog) store.adminLog = [];
   store.adminLog.push({
@@ -11,7 +11,7 @@ function logAction(actorId, actorName, action, targetType, targetId, detail) {
     detail: detail || '',
     at: new Date().toISOString()
   });
-  // keep only the most recent 500 entries so the file doesn't blow up
+  // 只留最近 500 条，不然 log 会越来越大
   if (store.adminLog.length > 500) {
     store.adminLog.splice(0, store.adminLog.length - 500);
   }
@@ -57,7 +57,7 @@ function getAllUsers() {
   return { success: true, data: result };
 }
 
-// toggle a user's banned flag - they can no longer log in or be messaged
+// 封号/解封：被封的用户不能登录也不能收私信
 function setUserBanned(targetId, banned, actor) {
   const user = store.users.find(u => u.id === targetId);
   if (!user) return { success: false, message: 'User not found' };
@@ -69,7 +69,7 @@ function setUserBanned(targetId, banned, actor) {
   return { success: true, message: banned ? 'User banned' : 'User unbanned', data: { id: user.id, banned: user.banned } };
 }
 
-// admins can promote/demote (but never demote themselves)
+// 改用户角色，自己不能把自己降级
 function setUserRole(targetId, role, actor) {
   const validRoles = ['user', 'admin'];
   if (!validRoles.includes(role)) return { success: false, message: 'Invalid role' };
@@ -87,7 +87,7 @@ function setUserRole(targetId, role, actor) {
   return { success: true, message: `Role set to ${role}`, data: { id: user.id, role } };
 }
 
-// hard-delete a user and clean up their data - destructive, used sparingly
+// 真删一个用户，他的所有数据也一起清掉，慎用
 function deleteUser(targetId, actor) {
   const idx = store.users.findIndex(u => u.id === targetId);
   if (idx === -1) return { success: false, message: 'User not found' };
@@ -95,13 +95,13 @@ function deleteUser(targetId, actor) {
   if (user.role === 'admin') return { success: false, message: 'Cannot delete an admin account' };
 
   store.users.splice(idx, 1);
-  // strip their data so nothing dangles
+  // 关联数据全清掉
   store.products = store.products.filter(p => p.sellerId !== targetId);
   store.favorites = store.favorites.filter(f => f.userId !== targetId);
   store.cart = store.cart.filter(c => c.userId !== targetId);
   store.browsingHistory = store.browsingHistory.filter(h => h.userId !== targetId);
   store.reviews = store.reviews.filter(r => r.buyerId !== targetId && r.sellerId !== targetId);
-  // keep messages and reports for audit, but mark sender/receiver as removed
+  // 消息和举报留下来做审计，但发送/接收人显示为 [deleted]
   for (const m of store.messages) {
     if (m.senderId === targetId) m.senderName = '[deleted]';
     if (m.receiverId === targetId) m.receiverName = '[deleted]';

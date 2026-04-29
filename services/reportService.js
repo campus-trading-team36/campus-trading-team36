@@ -1,4 +1,4 @@
-// report service
+// 举报相关业务逻辑
 
 const { v4: uuidv4 } = require('uuid');
 const { store, save } = require('../models/db');
@@ -27,19 +27,19 @@ function createReport(reporterId, reporterName, data) {
     }
   }
 
-  // prevent duplicate reports
+  // 同一个人不能重复举报同一个东西
   const existing = store.reports.find(
     r => r.reporterId === reporterId && r.targetId === data.targetId && r.status === 'pending'
   );
   if (existing) return { success: false, message: 'You already reported this item' };
 
-  // anti-spam: max 5 open reports per reporter at once
+  // 防止刷举报：每个人最多 5 个待处理举报
   const openByMe = store.reports.filter(r => r.reporterId === reporterId && r.status === 'pending').length;
   if (openByMe >= 5) {
     return { success: false, message: 'You already have several open reports awaiting review' };
   }
 
-  // snapshot target name so admin sees what was reported even if the item is later edited
+  // 把被举报对象的名字也存一份，免得后面改了 admin 看不到当时是什么
   let targetName = '';
   if (targetType === 'product') {
     const p = store.products.find(x => x.id === data.targetId);

@@ -1,4 +1,5 @@
-// Auth middleware - token-based sessions with expiry and persistence
+// 登录认证中间件
+// session 用 token 存在内存里，重启时从 sessions.json 恢复
 
 const fs = require('fs');
 const path = require('path');
@@ -6,12 +7,12 @@ const { store } = require('../models/db');
 const { randomToken } = require('../utils/security');
 
 const SESSION_FILE = path.join(__dirname, '../sessions.json');
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 天
 
 // token -> { userId, createdAt, lastSeen }
 let sessions = {};
 
-// load persisted sessions on boot so users survive a restart
+// 启动时把磁盘上的 session 读回来，重启不会把所有人踢出去
 try {
   if (fs.existsSync(SESSION_FILE)) {
     const raw = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
@@ -24,7 +25,7 @@ try {
 
 let saveTimer = null;
 function persistSessions() {
-  // debounce - don't write the file on every request
+  // 节流：每次请求都写一次太频繁
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
     saveTimer = null;
@@ -43,7 +44,7 @@ function pruneExpired() {
   let changed = false;
   for (const tok of Object.keys(sessions)) {
     const s = sessions[tok];
-    // legacy sessions may lack lastSeen - fall back to createdAt or expire them
+    // 老 session 可能没 lastSeen 字段，用 createdAt 兜底
     const seen = s.lastSeen || s.createdAt || 0;
     if (seen < cutoff) {
       delete sessions[tok];
@@ -52,7 +53,7 @@ function pruneExpired() {
   }
   if (changed) persistSessions();
 }
-// background sweep
+// 每小时跑一次清理
 setInterval(pruneExpired, 60 * 60 * 1000).unref();
 
 function createSession(userId) {
@@ -70,7 +71,7 @@ function removeSession(token) {
   }
 }
 
-// kick a user off every device - used when their password changes or they get banned
+// 把某个用户的所有 session 全删了（改密码或被封号时用）
 function removeUserSessions(userId) {
   let changed = false;
   for (const tok of Object.keys(sessions)) {
@@ -82,7 +83,7 @@ function removeUserSessions(userId) {
   if (changed) persistSessions();
 }
 
-// flush sessions immediately (used on graceful shutdown)
+// 立刻把 session 写到磁盘（关服务器前调一下）
 function flushSessions() {
   if (saveTimer) {
     clearTimeout(saveTimer);
@@ -114,7 +115,7 @@ function requireAuth(req, res, next) {
     return res.status(401).json({ success: false, message: 'Session expired, please log in again' });
   }
 
-  // expire stale sessions (handle legacy sessions without lastSeen)
+  // 太久没活动的 session 算过期
   const lastSeen = session.lastSeen || session.createdAt || 0;
   if (Date.now() - lastSeen > SESSION_TTL_MS) {
     delete sessions[token];
@@ -129,14 +130,14 @@ function requireAuth(req, res, next) {
     return res.status(401).json({ success: false, message: 'User not found' });
   }
 
-  // banned users lose access immediately
+  // 被封号的用户立刻断开
   if (user.banned) {
     delete sessions[token];
     persistSessions();
     return res.status(403).json({ success: false, message: 'This account has been suspended' });
   }
 
-  // bump last-seen so active users keep their session
+  // 更新一下活动时间，活跃用户的 session 不会过期
   session.lastSeen = Date.now();
   persistSessions();
 

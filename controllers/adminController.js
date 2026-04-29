@@ -1,4 +1,4 @@
-// Admin controller - handles admin panel endpoints
+// 管理员后台相关接口的 controller
 
 const adminService = require("../services/adminService");
 const reportService = require("../services/reportService");

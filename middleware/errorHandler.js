@@ -1,4 +1,4 @@
-// centralised error handler - turns thrown errors into clean JSON responses
+// 全局错误处理：把抛出的异常转成 JSON 返回
 
 const multer = require('multer');
 
@@ -10,7 +10,7 @@ function notFound(req, res, next) {
 }
 
 function errorHandler(err, req, res, next) {
-  // multer-specific errors get nicer messages
+  // multer 的错误单独处理一下，让提示更友好
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({ success: false, message: 'File too large (max 5 MB per image)' });
@@ -21,12 +21,12 @@ function errorHandler(err, req, res, next) {
     return res.status(400).json({ success: false, message: 'Upload error: ' + err.message });
   }
 
-  // JSON parse failure (malformed body)
+  // 客户端传的不是合法 JSON
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ success: false, message: 'Invalid JSON body' });
   }
 
-  // body too large
+  // body 太大
   if (err.type === 'entity.too.large') {
     return res.status(413).json({ success: false, message: 'Request body too large' });
   }
