@@ -1282,7 +1282,7 @@ function loadFavs() {
       const el = document.getElementById('favList');
       el.innerHTML = '';
       if (!d.success || !d.data.length) {
-        el.innerHTML = '<div class="empty-state"><div class="empty-icon">🤍</div>No favourites yet</div>';
+        el.innerHTML = '<div class="empty-state"><div class="empty-icon">🤍</div>No favourites yet<br><button class="btn btn-outline" style="margin-top:12px;" onclick="showPage(\'home\')">Browse listings</button></div>';
         document.getElementById('favTotal').innerHTML = '';
         return;
       }
@@ -1336,7 +1336,7 @@ function loadCart() {
       const clearBtn = document.getElementById('clearCartBtn');
       el.innerHTML = '';
       if (!d.success || !d.data.length) {
-        el.innerHTML = '<div class="empty-state"><div class="empty-icon">🛒</div>Your cart is empty</div>';
+        el.innerHTML = '<div class="empty-state"><div class="empty-icon">🛒</div>Your cart is empty<br><button class="btn btn-outline" style="margin-top:12px;" onclick="showPage(\'home\')">Browse listings</button></div>';
         document.getElementById('cartTotal').innerHTML = '';
         clearBtn.style.display = 'none';
         return;
